@@ -61,6 +61,9 @@ enum KnowledgeImport {
 private final class WordText: NSObject, XMLParserDelegate {
     private var text = ""
     private var inText = false
+    private var size = 0
+    private var limitReached = false
+    private var prohibitedEntity = false
 
     static func extract(from data: Data) throws -> String {
         let xml = try WordArchive(data: data).document()
@@ -69,24 +72,45 @@ private final class WordText: NSObject, XMLParserDelegate {
         parser.shouldProcessNamespaces = true
         parser.externalEntityResolvingPolicy = .never
         parser.delegate = reader
-        guard parser.parse() else { throw KnowledgeImportError.unreadableWordFile }
+        let parsed = parser.parse()
+        guard !reader.prohibitedEntity, parsed || reader.limitReached else { throw KnowledgeImportError.unreadableWordFile }
         return reader.text
     }
 
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?,
                 qualifiedName qName: String?, attributes attributeDict: [String: String]) {
         if elementName == "t" { inText = true }
-        if elementName == "tab" { text += "\t" }
-        if elementName == "br" { text += "\n" }
+        if elementName == "tab" { append("\t", parser: parser) }
+        if elementName == "br" { append("\n", parser: parser) }
     }
 
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
         if elementName == "t" { inText = false }
-        if elementName == "p" { text += "\n" }
+        if elementName == "p" { append("\n", parser: parser) }
     }
 
     func parser(_ parser: XMLParser, foundCharacters string: String) {
-        if inText { text += string }
+        if inText { append(string, parser: parser) }
+    }
+
+    func parser(_ parser: XMLParser, foundInternalEntityDeclarationWithName name: String, value: String?) {
+        prohibitedEntity = true
+        parser.abortParsing()
+    }
+
+    func parser(_ parser: XMLParser, foundExternalEntityDeclarationWithName name: String, publicID: String?, systemID: String?) {
+        prohibitedEntity = true
+        parser.abortParsing()
+    }
+
+    private func append(_ string: String, parser: XMLParser) {
+        let addition = string.prefix(KnowledgeImport.textLimit - size)
+        text += addition
+        size += addition.count
+        if size >= KnowledgeImport.textLimit {
+            limitReached = true
+            parser.abortParsing()
+        }
     }
 }
 

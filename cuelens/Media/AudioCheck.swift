@@ -8,6 +8,7 @@ final class AudioCheck {
     private(set) var heard = Set<AudioSource>()
     private(set) var errors = [AudioSource: String]()
     private(set) var testing = false
+    private(set) var attempted = Set<AudioSource>()
     @ObservationIgnored private var inputs = [AudioPipeline]()
     @ObservationIgnored private var work: Task<Void, Never>?
     @ObservationIgnored private var id: UUID?
@@ -17,6 +18,7 @@ final class AudioCheck {
         let id = UUID()
         self.id = id
         testing = true
+        attempted = Set(sources)
         levels.removeAll()
         errors.removeAll()
         heard.removeAll()

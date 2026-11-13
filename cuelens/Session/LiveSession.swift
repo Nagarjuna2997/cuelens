@@ -27,6 +27,7 @@ final class LiveSession {
     private(set) var transcriptionDelay: TimeInterval?
     private(set) var practiceQuestion = ""
     private(set) var pendingSave: MeetingSession?
+    private(set) var resourceCondition = ResourceCondition.normal
     private(set) var captureImage: CaptureImage?
     var captureError: String?
     var composer = ""
@@ -185,6 +186,14 @@ final class LiveSession {
         }
     }
 
+    func setResources(_ condition: ResourceCondition) {
+        resourceCondition = condition
+        if condition == .critical && generating {
+            cancelAnswer()
+            answerError = "CueLens paused generation to reduce resource use."
+        }
+    }
+
     func emergencyStop() {
         pause()
         cancelAnswer()
@@ -336,9 +345,9 @@ final class LiveSession {
         timing = AnswerTiming(questionEnded: ended, requestStarted: Date())
         usage = TokenUsage()
         let text = question
-        let history = record?.transcript.suffix(settings.resourcePreset.recentTurns).map { $0 } ?? []
+        let preset = resourceCondition.reducesWork ? ResourcePreset.low : settings.resourcePreset
+        let history = record?.transcript.suffix(preset.recentTurns).map { $0 } ?? []
         let length = length
-        let preset = settings.resourcePreset
         let index = index
         let indexTask = indexTask
         let streamer = streamer
@@ -440,8 +449,7 @@ final class LiveSession {
 
     private func stopSource(_ source: AudioSource, retainPartial: Bool) {
         audioIDs[source] = nil
-        let startingTask = startingTasks.removeValue(forKey: source)
-        startingTask?.cancel()
+        startingTasks.removeValue(forKey: source)?.cancel()
         starting.remove(source)
         activeSources.remove(source)
         levels[source] = 0
@@ -452,7 +460,6 @@ final class LiveSession {
             let prior = stoppingTasks[source]
             stoppingTasks[source] = Task {
                 await prior?.value
-                await startingTask?.value
                 await input.stop()
             }
         }
@@ -479,7 +486,7 @@ final class LiveSession {
             guard !clean.isEmpty else { return }
             transcriptionDelay = max(0, Date().timeIntervalSince(ended))
             append(.init(time: max(0, began.timeIntervalSince(started)), source: source, text: String(clean.prefix(6_000))))
-            guard automatic, options.allowCloud, canAnswer, phase == .active,
+            guard automatic, !resourceCondition.reducesWork, options.allowCloud, canAnswer, phase == .active,
                   let detected = QuestionDetection.question(in: clean, source: source, locale: settings.speechLocale) else { return }
             let key = QuestionDetection.normalized(detected)
             if let (last, when) = lastAutomatic, last == key, Date().timeIntervalSince(when) < 25 { return }

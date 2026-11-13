@@ -14,6 +14,12 @@ struct SessionWorkspace: View {
         VStack(spacing: 0) {
             header
             Divider()
+            if live.resourceCondition.reducesWork {
+                Label("Resource pressure · Automatic answers are paused.", systemImage: "gauge.with.needle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(6)
+            }
             HSplitView {
                 transcript
                     .frame(minWidth: floating ? 200 : 235, idealWidth: 280, maxWidth: 520)

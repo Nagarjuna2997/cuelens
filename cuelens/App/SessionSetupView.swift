@@ -110,10 +110,14 @@ struct SessionSetupView: View {
                     }
                     .disabled(audioSources.isEmpty && !check.testing)
                     Spacer()
-                    SettingsLink(label: "Audio Permissions", pane: "Privacy_ScreenCapture")
+                    Menu("Permissions") {
+                        SettingsLink(label: "Microphone", pane: "Privacy_Microphone")
+                        SettingsLink(label: "Screen & System Audio", pane: "Privacy_ScreenCapture")
+                        SettingsLink(label: "Speech Recognition", pane: "Privacy_SpeechRecognition")
+                    }
                 }
-                if check.testing || !check.heard.isEmpty || !check.errors.isEmpty || !check.levels.isEmpty {
-                    ForEach(audioSources) { source in
+                if check.testing || !check.attempted.isEmpty {
+                    ForEach(audioSources.filter { check.attempted.contains($0) }) { source in
                         if let error = check.errors[source] {
                             Text(error).foregroundStyle(.secondary)
                         } else {
@@ -141,6 +145,7 @@ struct SessionSetupView: View {
                 Toggle("Save transcript and suggestions on this Mac", isOn: $options.save)
                 Toggle("Save raw audio on this Mac", isOn: $options.saveAudio).disabled(!options.save)
                 Toggle("Open floating session window", isOn: $showFloating)
+                LabeledContent("CueLens camera", value: model.camera.publishing ? "Sending video to virtual camera" : "Off")
             }
         }
         .formStyle(.grouped)

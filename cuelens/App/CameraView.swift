@@ -7,6 +7,7 @@ struct CameraView: View {
     @State private var cameras = [CameraDevice]()
     @State private var cameraID: String?
     @State private var compare = true
+    @State private var installing = false
 
     var body: some View {
         ScrollView {
@@ -61,18 +62,60 @@ struct CameraView: View {
                     }
                     Text("Experimental correction gently shifts detected pupils when the face is nearly front-on. Blinks, side angles, uncertain landmarks, and resource pressure use the original feed.")
                         .foregroundStyle(.secondary)
-                    Text("Camera processing stays on this Mac. CueLens currently previews the result here. Select your physical camera in the meeting app.")
+                    Text("Camera processing stays on this Mac.")
                         .foregroundStyle(.secondary)
                 }
+                virtualCameraSection
             }
             .frame(maxWidth: 900)
             .padding(28)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .onAppear { cameras = CameraDevice.available(); preview.preset = model.preferences.resourcePreset }
-        .onDisappear { preview.stop() }
+        .onAppear {
+            cameras = CameraDevice.available()
+            preview.preset = model.preferences.resourcePreset
+            if model.virtualCamera.bundled { model.virtualCamera.refresh() }
+        }
+        .onDisappear { if !preview.publishing { preview.stop() } }
+        .confirmationDialog("Enable the CueLens camera extension?", isPresented: $installing) {
+            Button("Request Activation") { model.virtualCamera.request(install: true) }
+        } message: {
+            Text("macOS will ask an administrator to approve a system extension so meeting apps can select CueLens Camera.")
+        }
         .onReceive(NotificationCenter.default.publisher(for: AVCaptureDevice.wasConnectedNotification)) { _ in cameras = CameraDevice.available() }
         .onReceive(NotificationCenter.default.publisher(for: AVCaptureDevice.wasDisconnectedNotification)) { _ in cameras = CameraDevice.available() }
+    }
+
+    private var virtualCameraSection: some View {
+        CueCard {
+            Text("Virtual camera").font(.headline)
+            if model.virtualCamera.bundled {
+                HStack {
+                    if model.virtualCamera.available {
+                        Button(preview.publishing ? "Stop Sending Video" : "Send Video to CueLens Camera") {
+                            preview.setPublishing(!preview.publishing)
+                        }
+                        .disabled(!preview.active)
+                        Button("Deactivate Extension", role: .destructive) {
+                            preview.setPublishing(false)
+                            model.virtualCamera.request(install: false)
+                        }
+                        .disabled(model.virtualCamera.requesting)
+                    } else {
+                        Button("Enable Camera Extension…") { installing = true }.disabled(model.virtualCamera.requesting)
+                    }
+                    Spacer()
+                    Button("Refresh") { model.virtualCamera.refresh() }
+                }
+                if !model.virtualCamera.status.isEmpty { Text(model.virtualCamera.status).foregroundStyle(.secondary) }
+                if let error = preview.virtualError { Text(error).foregroundStyle(.secondary) }
+                Text("Start preview, enable sending, and select CueLens Camera in your meeting app. The physical camera is available in your meeting app if the extension is unavailable.")
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("This build supports preview. Virtual camera activation requires a separately signed CueLens camera build.")
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private func cameraImage(_ image: CGImage, label: String, eyes: [CGPoint]) -> some View {

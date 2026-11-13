@@ -17,6 +17,7 @@ enum ProviderError: LocalizedError, Equatable {
         case .cloudApprovalRequired: "Allow cloud processing before sending session content."
         case .refused: "The provider declined this request."
         case .incomplete: "The provider reached its output limit. Retry with a shorter response."
+        case .http(400): "The provider rejected this request. Check the model ID and whether it supports the requested input."
         case .http(401), .http(403): "The provider rejected access. Check the API key and model permissions."
         case .http(404): "The model was unavailable. Check the model ID and access in Providers."
         case .http(429): "The provider is rate-limited or out of quota. Wait, then retry or choose your backup."
@@ -116,7 +117,7 @@ struct ProviderConnection {
                     "generationConfig": ["maxOutputTokens": prompt.outputLimit, "candidateCount": 1]]
             if model.hasPrefix("gemini-3.8-flash") {
                 body["generationConfig"] = ["maxOutputTokens": prompt.outputLimit, "candidateCount": 1,
-                                            "thinkingConfig": ["thinkingLevel": "minimal"]]
+                                            "thinkingConfig": ["thinkingLevel": "low"]]
             }
             if let screenshot {
                 let parts: [[String: Any]] = [

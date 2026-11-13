@@ -61,6 +61,7 @@ final class AudioPipeline: @unchecked Sendable {
     private var recordingURL: URL?
     private var lastMeter: TimeInterval = 0
     private var accepting = false
+    private var retired = false
 
     init(source: AudioSource, emit: @escaping Emit) {
         self.source = source
@@ -75,6 +76,7 @@ final class AudioPipeline: @unchecked Sendable {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             queue.async {
                 do {
+                    guard !self.retired else { throw CancellationError() }
                     try self.startOnQueue(microphoneID: microphoneID, speechProvider: speechProvider, locale: locale,
                                           apiKey: apiKey, recordingURL: recordingURL)
                     continuation.resume()
@@ -162,6 +164,7 @@ final class AudioPipeline: @unchecked Sendable {
     }
 
     private func stopOnQueue() {
+        retired = true
         accepting = false
         input?.stop()
         input = nil

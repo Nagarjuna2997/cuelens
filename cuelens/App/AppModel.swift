@@ -8,6 +8,8 @@ final class AppModel {
     let credentials: any CredentialStore
     let live: LiveSession
     let camera = CameraPreview()
+    let virtualCamera = VirtualCameraControl()
+    let resources = Resources()
     @ObservationIgnored lazy var overlay = FloatingWindow(model: self)
     var selectedAssistantID: UUID?
     private(set) var workspace = Workspace()
@@ -30,6 +32,12 @@ final class AppModel {
         catch { self.error = "CueLens couldn’t read the session history. Check the Sessions folder in \(vault.directory.path)." }
         live.onSaved = { [weak self] session in self?.updateHistory(session) }
         live.onEmergency = { [weak self] in self?.camera.stop() }
+        resources.onConditionChange = { [weak self] condition in
+            self?.camera.lowResources = condition.reducesWork
+            self?.live.setResources(condition)
+        }
+        camera.lowResources = resources.condition.reducesWork
+        live.setResources(resources.condition)
     }
 
     func openSessionSetup() {

@@ -21,25 +21,36 @@ struct ContentView: View {
             .listStyle(.sidebar)
             .navigationSplitViewColumnWidth(min: 172, ideal: 196)
         } detail: {
-            switch model.selection ?? .home {
-            case .home:
-                OverviewView(model: model) { editing = AssistantProfile() }
-            case .assistants:
-                AssistantsView(model: model) { editing = $0 }
-            case .session:
-                if model.live.isOpen {
-                    SessionWorkspace(live: model.live, floating: false, overlay: model.workspace.overlay ?? OverlayPreferences())
-                } else {
-                    SessionSetupView(model: model)
+            VStack(spacing: 0) {
+                if model.camera.publishing {
+                    HStack {
+                        Label("CueLens Camera is sending video", systemImage: "video.fill")
+                        Spacer()
+                        Button("Stop Camera") { model.camera.stop() }
+                    }
+                    .padding(10)
+                    .background(.quaternary.opacity(0.45))
                 }
-            case .history:
-                HistoryView(model: model)
-            case .providers:
-                ProvidersView(model: model)
-            case .privacy:
-                PrivacyView(model: model)
-            case .camera:
-                CameraView(model: model, preview: model.camera)
+                switch model.selection ?? .home {
+                case .home:
+                    OverviewView(model: model) { editing = AssistantProfile() }
+                case .assistants:
+                    AssistantsView(model: model) { editing = $0 }
+                case .session:
+                    if model.live.isOpen {
+                        SessionWorkspace(live: model.live, floating: false, overlay: model.workspace.overlay ?? OverlayPreferences())
+                    } else {
+                        SessionSetupView(model: model)
+                    }
+                case .history:
+                    HistoryView(model: model)
+                case .providers:
+                    ProvidersView(model: model)
+                case .privacy:
+                    PrivacyView(model: model)
+                case .camera:
+                    CameraView(model: model, preview: model.camera)
+                }
             }
         }
         .tint(CueStyle.accent)
@@ -134,6 +145,18 @@ struct OverviewView: View {
                     Button("Show Floating Bar", systemImage: "macwindow.on.rectangle") { model.overlay.toggle() }
                     Button("Screen Share Test", systemImage: "rectangle.dashed") { model.selection = .privacy }
                 }
+                CueCard {
+                    HStack {
+                        Label("CueLens resources", systemImage: "gauge.with.needle").font(.headline)
+                        Spacer()
+                        Text(model.resources.condition.rawValue).foregroundStyle(.secondary)
+                    }
+                    HStack(spacing: 16) {
+                        if let cpu = model.resources.cpuPercent { Text(String(format: "%.1f%% CPU", cpu)) }
+                        if let memory = model.resources.memoryMB { Text(String(format: "%.0f MB memory", memory)) }
+                        Text(model.preferences.resourcePreset.rawValue + " preset")
+                    }.font(.callout.monospacedDigit()).foregroundStyle(.secondary)
+                }
                 if !model.history.isEmpty {
                     Button("View Session History") { model.selection = .history }
                 }
@@ -141,6 +164,12 @@ struct OverviewView: View {
             .frame(maxWidth: 780)
             .padding(30)
             .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .task {
+            while !Task.isCancelled {
+                model.resources.sample()
+                try? await Task.sleep(for: .seconds(3))
+            }
         }
     }
 

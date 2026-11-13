@@ -10,7 +10,7 @@ struct CameraDevice: Identifiable {
     static func available() -> [Self] {
         AVCaptureDevice.DiscoverySession(deviceTypes: [.builtInWideAngleCamera, .external, .continuityCamera],
                                          mediaType: .video, position: .unspecified)
-            .devices.map { Self(id: $0.uniqueID, name: $0.localizedName) }
+            .devices.filter { !VirtualCameraOutput.isVirtual($0.uniqueID) }.map { Self(id: $0.uniqueID, name: $0.localizedName) }
     }
 }
 
@@ -41,6 +41,8 @@ final class CameraPreview {
     private(set) var active = false
     private(set) var frame: CameraFrame?
     private(set) var error: String?
+    private(set) var publishing = false
+    private(set) var virtualError: String?
     var tracking = false { didSet { configure() } }
     var correction = false { didSet { configure() } }
     var strength = 0.55 { didSet { configure() } }
@@ -94,6 +96,24 @@ final class CameraPreview {
         }
     }
 
+    func setPublishing(_ enabled: Bool) {
+        guard let engine, active else { return }
+        if !enabled { publishing = false }
+        virtualError = nil
+        let token = token
+        engine.setPublishing(enabled) { [weak self] result in
+            Task { @MainActor in
+                guard let self, self.token == token else { return }
+                switch result {
+                case .success(let active): self.publishing = active
+                case .failure(let error):
+                    self.publishing = false
+                    self.virtualError = error.localizedDescription
+                }
+            }
+        }
+    }
+
     func stop() {
         token = UUID()
         request?.cancel()
@@ -103,6 +123,7 @@ final class CameraPreview {
         starting = false
         active = false
         frame = nil
+        publishing = false
     }
 
     private func configure() {
@@ -118,6 +139,8 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
     private let context = CIContext(options: [.cacheIntermediates: false])
     private let output: @Sendable (Result<CameraFrame, CameraFailure>) -> Void
     private var gaze: GazeCorrection?
+    private var virtualCamera: VirtualCameraOutput?
+    private var publishStatus: (@Sendable (Result<Bool, Error>) -> Void)?
     private var observers = [NSObjectProtocol]()
     private var running = false
     private var tracking = false
@@ -143,6 +166,22 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
 
     func stop() { queue.async { self.stopOnQueue() } }
 
+    func setPublishing(_ enabled: Bool, report: @escaping @Sendable (Result<Bool, Error>) -> Void) {
+        queue.async {
+            self.publishStatus = report
+            if enabled, self.running {
+                do {
+                    if self.virtualCamera == nil { self.virtualCamera = try VirtualCameraOutput() }
+                    report(.success(true))
+                } catch { report(.failure(error)) }
+            } else {
+                self.virtualCamera?.stop()
+                self.virtualCamera = nil
+                report(.success(false))
+            }
+        }
+    }
+
     func configure(tracking: Bool, correction: Bool, strength: Double, preset: ResourcePreset, throttled: Bool) {
         queue.async {
             self.tracking = tracking
@@ -161,7 +200,7 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
     private func startOnQueue(deviceID: String?) throws {
         let device = deviceID.flatMap(AVCaptureDevice.init(uniqueID:))
             ?? (deviceID == nil ? AVCaptureDevice.default(for: .video) : nil)
-        guard let device, device.isConnected else { throw CameraFailure.unavailable }
+        guard let device, device.isConnected, !VirtualCameraOutput.isVirtual(device.uniqueID) else { throw CameraFailure.unavailable }
         let input = try AVCaptureDeviceInput(device: device)
         let video = AVCaptureVideoDataOutput()
         video.alwaysDiscardsLateVideoFrames = true
@@ -187,6 +226,9 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
 
     private func stopOnQueue() {
         running = false
+        virtualCamera?.stop()
+        virtualCamera = nil
+        publishStatus = nil
         observers.forEach(NotificationCenter.default.removeObserver)
         observers.removeAll()
         if capture.isRunning { capture.stopRunning() }
@@ -202,6 +244,7 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
         let input = CIImage(cvPixelBuffer: buffer)
         guard let original = context.createCGImage(input, from: input.extent) else { return }
         var corrected: CGImage?
+        var correctedInput: CIImage?
         var centers = [CGPoint]()
         var status = throttled ? "Resource limits · Original feed" : "Original feed"
         if tracking || correction {
@@ -213,12 +256,21 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
                     status = "Eye landmarks uncertain · Original feed"
                 } else if correction, let image = gaze.apply(to: input, eyes: eyes, strength: strength) {
                     corrected = context.createCGImage(image, from: input.extent)
+                    if corrected != nil { correctedInput = image }
                     status = corrected == nil ? "Correction unavailable · Original feed" : "Experimental correction applied"
                 } else if correction {
                     status = "Correction unavailable · Original feed"
                 } else {
                     status = "Eye landmarks tracked locally"
                 }
+            }
+        }
+        if let virtualCamera {
+            do { try virtualCamera.send(correctedInput ?? input, using: context) }
+            catch {
+                virtualCamera.stop()
+                self.virtualCamera = nil
+                publishStatus?(.failure(error))
             }
         }
         if rateStart == 0 { rateStart = now }

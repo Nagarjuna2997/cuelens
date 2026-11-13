@@ -30,6 +30,7 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
                 switch command {
                 case .toggle: toggle()
                 case .answer:
+                    guard model.live.isOpen else { return }
                     if model.live.composer.isEmpty { model.live.answerLatest() }
                     else { model.live.askComposer() }
                 case .emergency: model.live.emergencyStop(); hide()
@@ -51,13 +52,17 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
     func showTest() { display(.test) }
 
     func hide() {
+        if mode == .session { expandedSize = panel?.frame.size }
         panel?.orderOut(nil)
         visible = false
     }
 
     func applyPreferences() {
         register()
-        if let model { panel?.alphaValue = model.workspace.overlay?.opacity ?? 1 }
+        if let model {
+            panel?.alphaValue = model.workspace.overlay?.opacity ?? 1
+            expandedSize = nil
+        }
     }
 
     private func sessionChanged() {
@@ -126,7 +131,7 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.delegate = self
         if let model {
-            let content = FloatingContent(model: model, controller: self).ignoresSafeArea()
+            let content = FloatingContent(model: model, controller: self).ignoresSafeArea().tint(CueStyle.accent)
             window.contentView = NSHostingView(rootView: content)
         }
         return window
@@ -198,6 +203,12 @@ private struct FloatingContent: View {
             .menuStyle(.borderlessButton)
             Spacer(minLength: 0)
             if model.live.isOpen {
+                if model.live.phase == .paused {
+                    Button("Resume", systemImage: "play.fill") { model.live.resume(); controller.show() }.labelStyle(.iconOnly)
+                } else {
+                    Button("Pause", systemImage: "pause.fill") { model.live.pause() }.labelStyle(.iconOnly)
+                        .disabled(model.live.phase != .active)
+                }
                 Button("Expand Session", systemImage: "rectangle.expand.vertical") { controller.show() }.labelStyle(.iconOnly)
             } else {
                 Button("Set Up Session", systemImage: "play.circle.fill") { model.openSessionSetup() }.labelStyle(.iconOnly)

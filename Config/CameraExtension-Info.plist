@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleName</key>
+    <string>CueLens Camera</string>
+    <key>CFBundleDisplayName</key>
+    <string>CueLens Camera</string>
+    <key>CFBundlePackageType</key>
+    <string>SYSX</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleVersion</key>
+    <string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>CFBundleShortVersionString</key>
+    <string>$(MARKETING_VERSION)</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.2</string>
+    <key>NSSystemExtensionUsageDescription</key>
+    <string>CueLens Camera makes a selected local camera preview available to meeting apps after you turn on video sharing.</string>
+    <key>CMIOExtension</key>
+    <dict>
+        <key>CMIOExtensionMachServiceName</key>
+        <string>$(TeamIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    </dict>
+    <key>CueLensHostIdentifier</key>
+    <string>$(CUELENS_HOST_IDENTIFIER)</string>
+    <key>CueLensSigningTeam</key>
+    <string>$(DEVELOPMENT_TEAM)</string>
+</dict>
+</plist>

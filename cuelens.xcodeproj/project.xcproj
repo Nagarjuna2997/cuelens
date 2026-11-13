@@ -51,6 +51,7 @@
         "GENERATE_INFOPLIST_FILE": "YES",
         "INFOPLIST_KEY_CFBundleDisplayName": "CueLens",
         "INFOPLIST_FILE": "Config/Info.plist",
+        "INFOPLIST_KEY_NSContinuityCameraUsageDescription": "CueLens uses the camera you choose for a local preview.",
         "INFOPLIST_KEY_NSCameraUsageDescription": "CueLens shows a local camera preview when you turn it on.",
         "INFOPLIST_KEY_NSMicrophoneUsageDescription": "CueLens transcribes your voice when you enable the microphone for a session or run an audio test.",
         "INFOPLIST_KEY_NSSpeechRecognitionUsageDescription": "CueLens uses on-device speech recognition to turn live audio into text.",

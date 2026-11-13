@@ -154,6 +154,8 @@ final class NoProviderRedirect: NSObject, URLSessionTaskDelegate {
 }
 
 enum ProviderHTTP {
+    static let answers = session()
+
     static func session() -> URLSession {
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false

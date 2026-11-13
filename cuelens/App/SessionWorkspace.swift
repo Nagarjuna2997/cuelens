@@ -277,9 +277,9 @@ private struct SessionComposer: View {
                     Label("Capture", systemImage: "viewfinder").labelStyle(.iconOnly)
                 }
                 .menuStyle(.borderlessButton).fixedSize()
-                .help("Capture a window or attach an image")
+                .help("Capture a window or attach an image. Requires cloud approval.")
                 .accessibilityIdentifier("captureMenu")
-                .disabled(!live.canAnswer)
+                .disabled(!live.canAnswer || !live.options.allowCloud)
                 TextField(live.options.practice ? "Type your practice answer" : "Ask a question", text: $live.composer, axis: .vertical)
                     .lineLimit(1...4)
                     .accessibilityIdentifier("questionComposer")

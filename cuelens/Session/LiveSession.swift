@@ -25,7 +25,6 @@ final class LiveSession {
     private(set) var timing: AnswerTiming?
     private(set) var usage = TokenUsage()
     private(set) var transcriptionDelay: TimeInterval?
-    private(set) var readyForAnswer = false
     private(set) var practiceQuestion = ""
     private(set) var pendingSave: MeetingSession?
     private(set) var captureImage: CaptureImage?
@@ -81,7 +80,6 @@ final class LiveSession {
         self.settings = settings
         self.options = options
         currentProvider = settings.answerSelection(for: assistant)
-        readyForAnswer = currentProvider.provider != .disabled
         let title = options.title.trimmingCharacters(in: .whitespacesAndNewlines)
         record = MeetingSession(title: title.isEmpty ? "\(assistant.name) \(options.practice ? "practice" : "session")" : title,
                                 assistantID: assistant.id, assistantName: assistant.name)
@@ -131,7 +129,7 @@ final class LiveSession {
     }
 
     func toggle(_ source: AudioSource) {
-        guard isOpen, phase != .ending, source != .manual else { return }
+        guard isOpen, phase != .ending, source == .microphone || source == .meeting else { return }
         if enabled.contains(source) {
             enabled.remove(source)
             stopSource(source, retainPartial: true)
@@ -221,9 +219,12 @@ final class LiveSession {
         guard canAnswer else { return }
         let recent = record?.transcript.suffix(16).reversed() ?? [].reversed()
         if let partial = partial[.meeting], !partial.isEmpty {
-            generate(QuestionDetection.question(in: partial, source: .meeting, locale: settings.speechLocale) ?? partial,
-                     task: .suggestion)
-        } else if let entry = recent.first(where: { $0.source == .meeting }) {
+            let text = QuestionDetection.question(in: partial, source: .meeting, locale: settings.speechLocale) ?? partial
+            lastAutomatic = (QuestionDetection.normalized(text), Date())
+            generate(text, task: .suggestion)
+        } else if let entry = recent.first(where: {
+            QuestionDetection.question(in: $0.text, source: $0.source, locale: settings.speechLocale) != nil
+        }) ?? recent.first(where: { $0.source == .meeting }) {
             let text = QuestionDetection.question(in: entry.text, source: .meeting, locale: settings.speechLocale) ?? entry.text
             generate(text, task: .suggestion)
         } else if !question.isEmpty {
@@ -251,12 +252,15 @@ final class LiveSession {
     }
 
     func reviewSpokenPracticeAnswer() {
-        if let line = record?.transcript.last(where: { $0.source == .microphone }) { submitPracticeAnswer(line.text) }
-        else { answerError = "Speak an answer or type it below." }
+        let lines = record?.transcript ?? []
+        let current = lines.lastIndex(where: { $0.source == .practice }).map { lines.suffix(from: $0 + 1) } ?? lines[...]
+        let spoken = current.filter { $0.source == .microphone }.map(\.text).joined(separator: " ")
+        if spoken.isEmpty { answerError = "Speak an answer or type it below." }
+        else { submitPracticeAnswer(spoken, typed: false) }
     }
 
-    private func submitPracticeAnswer(_ text: String) {
-        addNote(text)
+    private func submitPracticeAnswer(_ text: String, typed: Bool = true) {
+        if typed { addNote(text) }
         generate("Interview question: \(practiceQuestion.prefix(600))\nCandidate’s answer: \(text.prefix(1_350))",
                  task: .practiceFeedback)
     }
@@ -268,7 +272,7 @@ final class LiveSession {
     }
 
     func pickWindow() {
-        guard canAnswer else { return }
+        guard canAnswer, options.allowCloud else { captureError = ProviderError.cloudApprovalRequired.localizedDescription; return }
         captureError = nil
         let sessionID = record?.id
         capture.chooseWindow { [weak self] result in
@@ -281,6 +285,7 @@ final class LiveSession {
     }
 
     func attachImage(_ url: URL) {
+        guard canAnswer, options.allowCloud else { captureError = ProviderError.cloudApprovalRequired.localizedDescription; return }
         let sessionID = record?.id
         captureError = nil
         Task {

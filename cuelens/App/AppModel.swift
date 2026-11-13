@@ -7,6 +7,7 @@ final class AppModel {
     let vault: Vault
     let credentials: any CredentialStore
     let live: LiveSession
+    let camera = CameraPreview()
     @ObservationIgnored lazy var overlay = FloatingWindow(model: self)
     var selectedAssistantID: UUID?
     private(set) var workspace = Workspace()
@@ -28,6 +29,7 @@ final class AppModel {
         do { history = try vault.sessions() }
         catch { self.error = "CueLens couldn’t read the session history. Check the Sessions folder in \(vault.directory.path)." }
         live.onSaved = { [weak self] session in self?.updateHistory(session) }
+        live.onEmergency = { [weak self] in self?.camera.stop() }
     }
 
     func openSessionSetup() {
@@ -125,6 +127,7 @@ enum NavigationSection: String, CaseIterable, Identifiable {
     case history = "History"
     case providers = "Providers"
     case privacy = "Screen Sharing"
+    case camera = "Camera"
 
     var id: Self { self }
 
@@ -136,6 +139,7 @@ enum NavigationSection: String, CaseIterable, Identifiable {
         case .history: "clock.arrow.circlepath"
         case .providers: "slider.horizontal.3"
         case .privacy: "rectangle.dashed"
+        case .camera: "video"
         }
     }
 }

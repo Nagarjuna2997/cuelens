@@ -190,11 +190,15 @@ struct MeetingSession: Codable, Equatable, Identifiable {
     var transcript = [TranscriptLine]()
     var suggestions = [Suggestion]()
     var summary = ""
+    var summaryProvider: AnswerProvider?
     var sentAudioToCloud = false
     var sentTextToCloud = false
     var audioFiles: [String]?
 
-    var duration: TimeInterval { max(0, (endedAt ?? Date()).timeIntervalSince(startedAt)) }
+    var duration: TimeInterval {
+        if let endedAt { return max(0, endedAt.timeIntervalSince(startedAt)) }
+        return max(0, transcript.last?.time ?? 0)
+    }
 }
 
 struct SessionOptions: Equatable {

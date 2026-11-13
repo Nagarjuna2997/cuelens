@@ -4,6 +4,7 @@ import SwiftUI
 @main
 struct CueLensApp: App {
     @Environment(\.openWindow) private var openWindow
+    @NSApplicationDelegateAdaptor(CueLensAppDelegate.self) private var delegate
     @State private var model = AppModel()
 
     var body: some Scene {
@@ -31,4 +32,8 @@ struct CueLensApp: App {
             }
         }
     }
+}
+
+final class CueLensAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }

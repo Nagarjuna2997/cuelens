@@ -11,6 +11,7 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
     private var panel: CuePanel?
     private(set) var mode = Mode.bar
     private(set) var visible = false
+    private var expandedSize: NSSize?
     private(set) var shortcutError: String?
     @ObservationIgnored private var hotkeys: Hotkeys?
 
@@ -62,13 +63,18 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
     private func sessionChanged() {
         register()
         guard visible, mode != .test else { return }
-        display(model?.live.isOpen == true ? .session : .bar)
+        if model?.live.isOpen == true {
+            if mode == .bar, model?.live.phase == .active { display(.session) }
+        } else {
+            display(.bar)
+        }
     }
 
     private func display(_ mode: Mode) {
         guard let model else { return }
         let window = panel ?? createPanel()
         let firstDisplay = panel == nil
+        if self.mode == .session, let panel, visible { expandedSize = panel.frame.size }
         self.mode = mode
         let settings = model.workspace.overlay ?? OverlayPreferences()
         let target: NSSize
@@ -76,20 +82,21 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
         switch mode {
         case .bar: target = NSSize(width: 408, height: 54); minimum = target
         case .session:
-            target = settings.compact ? NSSize(width: 690, height: 440) : NSSize(width: 850, height: 570)
+            target = expandedSize ?? (settings.compact ? NSSize(width: 690, height: 440) : NSSize(width: 850, height: 570))
             minimum = NSSize(width: 550, height: 330)
         case .test: target = NSSize(width: 360, height: 115); minimum = target
         }
         let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first
         let bounds = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
         let old = window.frame
+        let size = NSSize(width: min(target.width, bounds.width), height: min(target.height, bounds.height))
         window.minSize = minimum
         window.maxSize = mode == .session ? NSSize(width: bounds.width, height: bounds.height) : target
-        let x = firstDisplay ? bounds.midX - target.width / 2 : old.midX - target.width / 2
+        let x = firstDisplay ? bounds.midX - size.width / 2 : old.midX - size.width / 2
         let top = firstDisplay ? bounds.maxY - 14 : old.maxY
-        let frame = NSRect(x: max(bounds.minX, min(bounds.maxX - target.width, x)),
-                           y: max(bounds.minY, min(bounds.maxY - target.height, top - target.height)),
-                           width: target.width, height: target.height)
+        let frame = NSRect(x: max(bounds.minX, min(bounds.maxX - size.width, x)),
+                           y: max(bounds.minY, min(bounds.maxY - size.height, top - size.height)),
+                           width: size.width, height: size.height)
         window.setFrame(frame, display: true)
         window.alphaValue = settings.opacity
         window.orderFrontRegardless()
@@ -119,7 +126,8 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.delegate = self
         if let model {
-            window.contentView = NSHostingView(rootView: FloatingContent(model: model, controller: self))
+            let content = FloatingContent(model: model, controller: self).ignoresSafeArea()
+            window.contentView = NSHostingView(rootView: content)
         }
         return window
     }

@@ -24,16 +24,15 @@ protocol AnswerStreaming {
 struct HTTPAnswerStream: AnswerStreaming {
     func stream(_ prompt: ProviderPrompt, connection: ProviderConnection,
                 emit: @escaping @Sendable (AnswerEvent) async -> Void) async throws {
-        let session = ProviderHTTP.session()
-        defer { session.invalidateAndCancel() }
-        let (bytes, response) = try await session.bytes(for: connection.request(prompt))
+        let (bytes, response) = try await ProviderHTTP.answers.bytes(for: connection.request(prompt))
+        defer { bytes.task.cancel() }
         try ProviderHTTP.validate(response)
         var reader = ServerSentEvents()
         var receivedText = false
         var completed = false
-        for try await line in bytes.lines {
+        for try await byte in bytes {
+            guard let payload = try reader.consume(byte: byte) else { continue }
             try Task.checkCancellation()
-            guard let payload = try reader.consume(line) else { continue }
             for event in try AnswerEvent.decode(payload, provider: connection.selection.provider) {
                 if case .text(let token) = event, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     receivedText = true
@@ -51,6 +50,24 @@ struct HTTPAnswerStream: AnswerStreaming {
 struct ServerSentEvents {
     private var data = [String]()
     private var size = 0
+    private var line = [UInt8]()
+    private var afterCarriageReturn = false
+
+    mutating func consume(byte: UInt8) throws -> String? {
+        if byte == 10, afterCarriageReturn {
+            afterCarriageReturn = false
+            return nil
+        }
+        afterCarriageReturn = byte == 13
+        if byte == 10 || byte == 13 {
+            let value = String(decoding: line, as: UTF8.self)
+            line.removeAll(keepingCapacity: true)
+            return try consume(value)
+        }
+        guard line.count < 512_000 else { throw ProviderError.invalidResponse }
+        line.append(byte)
+        return nil
+    }
 
     mutating func consume(_ line: String) throws -> String? {
         if line.isEmpty {

@@ -38,6 +38,8 @@ struct ContentView: View {
                 ProvidersView(model: model)
             case .privacy:
                 PrivacyView(model: model)
+            case .camera:
+                CameraView(model: model, preview: model.camera)
             }
         }
         .tint(CueStyle.accent)
@@ -53,7 +55,7 @@ struct ContentView: View {
 }
 
 enum CueStyle {
-    static let accent = Color(red: 0.08, green: 0.46, blue: 0.56)
+    static let accent = Color.accentColor
 }
 
 struct PageHeader: View {
@@ -231,14 +233,5 @@ struct AssistantsView: View {
         (showArchived ? model.assistants : model.activeAssistants).sorted {
             $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
-    }
-}
-
-struct HistoryView: View {
-    let model: AppModel
-
-    var body: some View {
-        ContentUnavailableView("No saved sessions", systemImage: "clock.arrow.circlepath",
-                               description: Text("Completed sessions will appear here once live sessions are available."))
     }
 }

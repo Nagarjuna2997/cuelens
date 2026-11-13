@@ -224,7 +224,7 @@ private actor FixtureAnswerStream: AnswerStreaming {
     func stream(_ prompt: ProviderPrompt, connection: ProviderConnection,
                 emit: @escaping @Sendable (AnswerEvent) async -> Void) async throws {
         count += 1
-        if prompt.input.contains("First question") {
+        if prompt.input.contains("\nREQUEST\nFirst question") {
             await emit(.text("Initial"))
             try? await Task.sleep(for: .seconds(2))
             await emit(.text(" obsolete"))

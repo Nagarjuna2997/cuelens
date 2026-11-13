@@ -8,6 +8,18 @@ The capture engine copies Core Audio buffers before their callback ends, normali
 
 Apple speech requires Speech Recognition permission and support for the selected locale. It requests on-device recognition. OpenAI Realtime requires its API key and an explicitly enabled audio-processing setting. A transcription failure keeps the audio input and optional recording running. The source shows an error and can be retried. A raw-audio write failure stops that recording and reports the failure while transcription continues.
 
+On the development Mac, concurrent Apple recognition tasks repeatedly cancelled each other. CueLens now schedules one local recognition turn at a time while retaining each source's audio and timestamps separately. The waiting source shows **Queued**. This is a workaround for the observed device behavior, not a claim that every Apple speech implementation has the same limit. Overlapping voices can add transcription delay. Successful recognition clears the speech error without hiding a separate capture or recording failure.
+
+Apple's “failed to recognize any speech” result is treated as an empty turn, so background noise does not turn a healthy source into an error. Service, permission, and timeout failures remain visible. [Apple speech error codes](https://developer.apple.com/documentation/speech/sfspeechrecognitiontask/error)
+
+Ending a session stops live capture and recording, then allows up to eight seconds for already captured Apple speech to finish. The recording has already stopped during this wait. If queued speech cannot finish or the bounded queue overflows, History and text exports flag the affected source as having an incomplete transcript. Immediate pause/emergency stop prioritizes stopping capture. Retained audio, when enabled, remains separate from transcript completeness.
+
+Testing microphone and meeting audio together on the development Mac exposed repeated local speech-task cancellations. CueLens now serializes Apple speech turns across sources and buffers the waiting source, with separate source labels. Each continuous turn is limited to eight seconds so one source can yield to the other. Overlapping speech can increase transcription latency. Waiting and failed states are shown separately. The scheduler is a CueLens workaround for the observed behavior, rather than a claim that every Apple speech implementation has the same limit. [Apple speech recognition tasks](https://developer.apple.com/documentation/speech/sfspeechrecognizer)
+
+An orderly End stops audio capture and recording immediately, then gives queued Apple speech up to eight seconds to finish. Timeouts and skipped turns mark the session transcript incomplete. Emergency stop cancels processing immediately. Diagnostic logs include the source, error domain, and numeric error code without recognized text.
+
+Apple's `kAFAssistantErrorDomain` code `1110` means the recognizer did not recognize speech in a turn. CueLens treats that result as an empty turn and keeps waiting, since room noise can trigger voice activity. Service interruption, authorization, and recognizer-contention errors remain visible failures. [Apple speech error codes](https://developer.apple.com/documentation/speech/sfspeechrecognitiontask/error)
+
 Raw audio is saved only when recording is selected for the session. Each source is written to its own CAF file and retries create a new part. Recording status becomes active after the first successful write. Session exports and deletion are available from History. The app’s sandbox stores its data under `Library/Containers/org.cuelens.mac/Data/Library/Application Support/CueLens/` inside the user’s home directory.
 
 ## System microphone effects

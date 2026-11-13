@@ -8,7 +8,6 @@ struct SessionSetupView: View {
     @State private var check = AudioCheck()
     @State private var inputs = [Microphone]()
     @State private var microphoneID: String?
-    @State private var showFloating = false
     @State private var editing: AssistantProfile?
 
     private var assistant: AssistantProfile? {
@@ -105,7 +104,6 @@ struct SessionSetupView: View {
                     }
                     DisclosureGroup("Session preferences") {
                         VStack(alignment: .leading, spacing: 14) {
-                            Toggle("Open in the compact window", isOn: $showFloating)
                             if !practice { Toggle("Mock interview practice", isOn: $options.practice) }
                             if !options.practice { Toggle("Answer meeting questions automatically", isOn: $options.automaticAnswers) }
                             Toggle("Save transcript and answers", isOn: $options.save)
@@ -170,10 +168,14 @@ struct SessionSetupView: View {
             microphoneID = model.preferences.microphoneID
             options.microphone = model.preferences.sessionMicrophone ?? true
             options.meetingAudio = practice ? false : (model.preferences.sessionMeetingAudio ?? true)
+            options.screenContext = model.preferences.sessionScreenContext ?? false
             if assistant == nil { model.selectedAssistantID = model.activeAssistants.first?.id }
             refreshAssistant()
         }
         .onChange(of: model.selectedAssistantID) { refreshAssistant() }
+        .onChange(of: options.practice) {
+            options.meetingAudio = options.practice ? false : (model.preferences.sessionMeetingAudio ?? true)
+        }
         .onChange(of: options.save) { if !options.save { options.saveAudio = false } }
         .onReceive(NotificationCenter.default.publisher(for: AVCaptureDevice.wasConnectedNotification)) { _ in inputs = Microphone.available() }
         .onReceive(NotificationCenter.default.publisher(for: AVCaptureDevice.wasDisconnectedNotification)) { _ in inputs = Microphone.available() }
@@ -223,15 +225,19 @@ struct SessionSetupView: View {
         guard let selected else { return }
         var preferences = model.preferences
         preferences.microphoneID = microphoneID
-        preferences.sessionMicrophone = options.microphone
-        preferences.sessionMeetingAudio = options.meetingAudio
+        // Practice starts with meeting audio off. Keep that choice scoped to
+        // practice so the next conversation still uses its saved sources.
+        if !options.practice {
+            preferences.sessionMicrophone = options.microphone
+            preferences.sessionMeetingAudio = options.meetingAudio
+        }
+        preferences.sessionScreenContext = options.screenContext
         if preferences != model.preferences { model.savePreferences(preferences) }
         model.live.start(assistant: selected, settings: preferences, options: options)
         model.overlay.register()
-        if showFloating {
-            model.overlay.show()
-            model.minimizeMainWindow()
-        } else { model.overlay.hide() }
+        guard model.live.isOpen else { return }
+        model.overlay.show(focus: true)
+        model.minimizeMainWindow()
     }
 }
 

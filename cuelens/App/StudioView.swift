@@ -49,15 +49,7 @@ struct StudioView: View {
                             .frame(minWidth: centerMinimum, maxWidth: .infinity, maxHeight: .infinity)
                     }
                     if cameraVisible {
-                        VStack(spacing: 0) {
-                            ScrollView { CameraStudioPanel(model: model, preview: model.camera).padding(14) }
-                            if !model.live.isOpen {
-                                Button("Float Camera", systemImage: "rectangle.on.rectangle") {
-                                    cameraVisible = false
-                                    model.cameraWindow.show()
-                                }.buttonStyle(.borderless).padding(.bottom, 14)
-                            }
-                        }
+                        ScrollView { CameraStudioPanel(model: model, preview: model.camera).padding(14) }
                         .frame(minWidth: 260, idealWidth: min(320, cameraMaximum), maxWidth: cameraMaximum, maxHeight: .infinity)
                     }
                 }
@@ -91,7 +83,9 @@ struct StudioStatusBar: View {
                 Label(model.camera.active ? "Camera on" : "Camera off", systemImage: "video")
                 Spacer(minLength: 0)
                 if model.live.isOpen { Text(model.live.currentProvider.provider.shortName) }
-                if let latency = model.live.timing?.firstTokenDelay { Text(String(format: "First text %.2fs", latency)) }
+                if model.live.isOpen, let latency = model.live.timing?.firstTokenDelay {
+                    Text(String(format: "First text %.2fs", latency))
+                }
                 if let memory = model.resources.memoryMB { Text(String(format: "%.0f MB", memory)) }
             }
             HStack {
@@ -124,7 +118,8 @@ final class StudioCameraWindow {
         panel.hidesOnDeactivate = false
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.contentView = NSHostingView(rootView: ScrollView { CameraStudioPanel(model: model, preview: model.camera, allowsDetach: false).padding(10) })
+        panel.contentView = NSHostingView(rootView: ScrollView { CameraStudioPanel(model: model, preview: model.camera, allowsDetach: false).padding(10) }
+            .preferredColorScheme(.dark).tint(CueStyle.accent))
         panel.center()
         panel.orderFrontRegardless()
         window = panel

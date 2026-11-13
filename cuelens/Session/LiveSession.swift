@@ -1,6 +1,41 @@
 import AppKit
 import Observation
 
+/// Capture callbacks enqueue synchronously. The main actor can drain this inbox
+/// after `AudioPipeline.stop` as a delivery barrier, independently of task order.
+final class AudioEventInbox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events = [AudioEvent]()
+
+    func append(_ event: AudioEvent) { lock.withLock { events.append(event) } }
+    func takeAll() -> [AudioEvent] {
+        lock.withLock {
+            let pending = events
+            events.removeAll(keepingCapacity: true)
+            return pending
+        }
+    }
+}
+
+struct AudioIssueState {
+    private var capture = [AudioSource: String]()
+    private var speech = [AudioSource: String]()
+
+    var messages: [AudioSource: String] {
+        capture.merging(speech) { captureMessage, speechMessage in
+            captureMessage + "\n" + speechMessage
+        }
+    }
+
+    mutating func captureFailed(_ source: AudioSource, message: String) { capture[source] = message }
+    mutating func speechFailed(_ source: AudioSource, message: String) { speech[source] = message }
+    mutating func speechRecovered(_ source: AudioSource) { speech[source] = nil }
+    mutating func clear(_ source: AudioSource) {
+        capture[source] = nil
+        speech[source] = nil
+    }
+}
+
 @MainActor
 @Observable
 final class LiveSession {
@@ -13,12 +48,14 @@ final class LiveSession {
     private(set) var settings = Preferences()
     private(set) var partial = [AudioSource: String]()
     private(set) var levels = [AudioSource: Float]()
-    private(set) var audioErrors = [AudioSource: String]()
+    private var audioIssues = AudioIssueState()
+    var audioErrors: [AudioSource: String] { audioIssues.messages }
     private(set) var starting = Set<AudioSource>()
     private(set) var enabled = Set<AudioSource>()
     private(set) var activeSources = Set<AudioSource>()
     private(set) var clippedSources = Set<AudioSource>()
     private(set) var transcribingSources = Set<AudioSource>()
+    private(set) var speechQueuedSources = Set<AudioSource>()
     private(set) var recordingSources = Set<AudioSource>()
     private(set) var currentProvider = ProviderSelection(provider: .disabled, model: "")
     private(set) var question = ""
@@ -54,6 +91,7 @@ final class LiveSession {
     @ObservationIgnored private var answerWork: Task<Void, Never>?
     @ObservationIgnored private var answerID: UUID?
     @ObservationIgnored private var audio = [AudioSource: AudioPipeline]()
+    @ObservationIgnored private var audioInboxes = [AudioSource: AudioEventInbox]()
     @ObservationIgnored private var startingTasks = [AudioSource: Task<Void, Never>]()
     @ObservationIgnored private var stoppingTasks = [AudioSource: Task<Void, Never>]()
     @ObservationIgnored private var audioIDs = [AudioSource: UUID]()
@@ -98,13 +136,14 @@ final class LiveSession {
     var backup: AnswerProvider? { settings.backupProvider == currentProvider.provider ? nil : settings.backupProvider }
     var savingAudio: Bool { options.save && options.saveAudio }
     var audioSourceLabel: String {
+        if phase == .idle { return "Ready to start" }
         if phase == .paused { return "Paused" }
         if phase == .ending { return "Ending" }
         if !recordingSources.isEmpty { return "Recording audio" }
         if audioLive { return "Listening" }
         if !starting.isEmpty { return "Connecting audio" }
         if !enabled.isEmpty && !audioErrors.isEmpty { return "Audio needs attention" }
-        return "Audio off"
+        return enabled.isEmpty ? "Sources disabled" : "Audio stopped"
     }
 
     func start(assistant: AssistantProfile, settings: Preferences, options: SessionOptions) {
@@ -120,10 +159,11 @@ final class LiveSession {
         if options.practice { record?.practiceStyle = options.practiceStyle }
         phase = .active
         partial.removeAll()
-        audioErrors.removeAll()
+        audioIssues = AudioIssueState()
         levels.removeAll()
         clippedSources.removeAll()
         transcribingSources.removeAll()
+        speechQueuedSources.removeAll()
         recordingSources.removeAll()
         audioPart.removeAll()
         enabled = Set([(AudioSource.microphone, options.microphone), (.meeting, options.meetingAudio)].compactMap { $0.1 ? $0.0 : nil })
@@ -199,7 +239,9 @@ final class LiveSession {
         index = nil
         discardImage()
         lastImage = nil
-        for source in enabled { stopSource(source, retainPartial: true) }
+        // Stop capture immediately, then give already captured speech a bounded
+        // opportunity to finish before saving the session.
+        for source in enabled { stopSource(source, retainPartial: true, finalizeSpeech: true) }
         enabled.removeAll()
         checkpoint?.cancel()
         checkpoint = nil
@@ -311,7 +353,8 @@ final class LiveSession {
 
     func togglePin() {
         guard let index = responseIndex, responses.indices.contains(index), !generating else { return }
-        record?.suggestions[index].pinned = !isPinned
+        let pinned = !isPinned
+        record?.suggestions[index].pinned = pinned
         scheduleCheckpoint()
     }
 
@@ -450,6 +493,12 @@ final class LiveSession {
         }
     }
 
+    func setScreenContext(_ enabled: Bool) {
+        guard phase == .active || phase == .paused else { return }
+        options.screenContext = enabled
+        if !enabled { discardImage() }
+    }
+
     private func requireScreenContext() -> Bool {
         guard phase == .active || phase == .paused else { return false }
         guard options.screenContext else {
@@ -550,6 +599,7 @@ final class LiveSession {
         let text = question
         let preset = resourceCondition.reducesWork ? ResourcePreset.low : settings.resourcePreset
         let history = record?.transcript.suffix(preset.recentTurns).map { $0 } ?? []
+        let recentSuggestions = record?.suggestions.suffix(3).map { $0 } ?? []
         let length = length
         let index = index
         let indexTask = indexTask
@@ -565,7 +615,8 @@ final class LiveSession {
                 self?.index = available
                 self?.indexTask = nil
                 let prompt = AnswerPrompts.make(task: task, question: text, assistant: assistant, index: available,
-                                                recent: history, length: length, preset: preset, image: image)
+                                                recent: history, length: length, preset: preset, image: image,
+                                                recentSuggestions: recentSuggestions)
                 self?.record?.sentTextToCloud = true
                 self?.scheduleCheckpoint()
                 try await streamer.stream(prompt, connection: connection) { [weak self] event in
@@ -647,11 +698,14 @@ final class LiveSession {
         }
         let id = UUID()
         audioIDs[source] = id
+        let inbox = AudioEventInbox()
+        audioInboxes[source] = inbox
         let input = AudioPipeline(source: source) { [weak self] event in
-            Task { @MainActor in self?.receiveAudio(event, id: id) }
+            inbox.append(event)
+            Task { @MainActor in self?.receiveBufferedAudio(inbox, id: id) }
         }
         audio[source] = input
-        audioErrors[source] = nil
+        audioIssues.clear(source)
         starting.insert(source)
         let priorStop = stoppingTasks[source]
         let settings = settings
@@ -662,36 +716,70 @@ final class LiveSession {
                 try Task.checkCancellation()
                 try await input.start(microphoneID: settings.microphoneID, speechProvider: speechProvider,
                                       locale: settings.speechLocale, apiKey: apiKey, recordingURL: url)
-                guard let self, audioIDs[source] == id, phase == .active else { await input.stop(); return }
+                guard let self, audioIDs[source] == id else { await input.stop(); return }
+                guard phase == .active else {
+                    // End owns graceful shutdown while its source ID is retained.
+                    if phase != .ending { await input.stop() }
+                    return
+                }
                 starting.remove(source)
                 activeSources.insert(source)
                 startingTasks[source] = nil
             } catch {
                 guard let self, audioIDs[source] == id else { return }
-                audioErrors[source] = error.localizedDescription
+                guard phase != .ending else { return }
+                audioIssues.captureFailed(source, message: error.localizedDescription)
                 stopSource(source, retainPartial: true)
             }
         }
     }
 
-    private func stopSource(_ source: AudioSource, retainPartial: Bool) {
-        audioIDs[source] = nil
-        startingTasks.removeValue(forKey: source)?.cancel()
+    private func stopSource(_ source: AudioSource, retainPartial: Bool, finalizeSpeech: Bool = false) {
+        let id = audioIDs[source]
+        let inbox = audioInboxes.removeValue(forKey: source)
+        if let inbox, let id { receiveBufferedAudio(inbox, id: id) }
+        if !finalizeSpeech { audioIDs[source] = nil }
+        let startup = startingTasks.removeValue(forKey: source)
+        if !finalizeSpeech { startup?.cancel() }
         starting.remove(source)
         activeSources.remove(source)
         levels[source] = 0
         clippedSources.remove(source)
-        transcribingSources.remove(source)
-        recordingSources.remove(source)
-        if let text = partial.removeValue(forKey: source), retainPartial, !text.isEmpty, let started = record?.startedAt {
-            append(.init(time: Date().timeIntervalSince(started), source: source, text: text, provisional: true))
+        if !finalizeSpeech {
+            transcribingSources.remove(source)
+            speechQueuedSources.remove(source)
         }
+        recordingSources.remove(source)
+        if !finalizeSpeech { retainStoppedPartial(source, retain: retainPartial) }
         if let input = audio.removeValue(forKey: source) {
             let prior = stoppingTasks[source]
             stoppingTasks[source] = Task {
                 await prior?.value
-                await input.stop()
+                await input.stop(finalizeSpeech: finalizeSpeech)
+                if let inbox, let id { receiveBufferedAudio(inbox, id: id) }
+                if finalizeSpeech, audioIDs[source] == id {
+                    audioIDs[source] = nil
+                    transcribingSources.remove(source)
+                    speechQueuedSources.remove(source)
+                    levels[source] = 0
+                    retainStoppedPartial(source, retain: retainPartial)
+                }
             }
+        } else if finalizeSpeech {
+            audioIDs[source] = nil
+            transcribingSources.remove(source)
+            speechQueuedSources.remove(source)
+            retainStoppedPartial(source, retain: retainPartial)
+        }
+    }
+
+    private func receiveBufferedAudio(_ inbox: AudioEventInbox, id: UUID) {
+        for event in inbox.takeAll() { receiveAudio(event, id: id) }
+    }
+
+    private func retainStoppedPartial(_ source: AudioSource, retain: Bool) {
+        if let text = partial.removeValue(forKey: source), retain, !text.isEmpty, let started = record?.startedAt {
+            append(.init(time: Date().timeIntervalSince(started), source: source, text: text, provisional: true))
         }
     }
 
@@ -701,6 +789,19 @@ final class LiveSession {
             guard audioIDs[source] == id else { return }
             if active { transcribingSources.insert(source) }
             else { transcribingSources.remove(source) }
+        case .speechFailure(let source, let message):
+            guard audioIDs[source] == id else { return }
+            audioIssues.speechFailed(source, message: message)
+        case .speechRecovered(let source):
+            guard audioIDs[source] == id else { return }
+            audioIssues.speechRecovered(source)
+        case .speechQueued(let source, let queued):
+            guard audioIDs[source] == id else { return }
+            if queued { speechQueuedSources.insert(source) }
+            else { speechQueuedSources.remove(source) }
+        case .transcriptionIncomplete(let source):
+            guard audioIDs[source] == id else { return }
+            markTranscriptionIncomplete(source)
         case .recording(let source, let active):
             guard audioIDs[source] == id else { return }
             if active { recordingSources.insert(source) }
@@ -715,31 +816,47 @@ final class LiveSession {
             if audioIDs[source] == id { partial[source] = String(text.prefix(6_000)) }
         case .failure(let source, let message, let recoverable):
             guard audioIDs[source] == id else { return }
-            audioErrors[source] = message
-            if recoverable { stopSource(source, retainPartial: true) }
+            audioIssues.captureFailed(source, message: message)
+            if recoverable, phase != .ending { stopSource(source, retainPartial: true) }
         case .cloudAudio(let source):
             guard audioIDs[source] == id else { return }
             record?.sentAudioToCloud = true
             scheduleCheckpoint()
         case .final(let source, let text, let began, let ended):
-            guard audioIDs[source] == id, let started = record?.startedAt else { return }
-            partial[source] = nil
-            let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !clean.isEmpty else { return }
-            transcriptionDelay = max(0, Date().timeIntervalSince(ended))
-            if options.practice && source == .microphone {
-                practiceSpeech.append(.init(text: clean, began: began, ended: ended))
-            }
-            append(.init(time: max(0, began.timeIntervalSince(started)), source: source, text: String(clean.prefix(6_000))))
-            guard automatic, !generating, !capturing, captureImage == nil,
-                  composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  !resourceCondition.reducesWork, canAnswer, phase == .active,
-                  let detected = QuestionDetection.question(in: clean, source: source, locale: settings.speechLocale) else { return }
-            let key = QuestionDetection.normalized(detected)
-            if let (last, when) = lastAutomatic, last == key, Date().timeIntervalSince(when) < 25 { return }
-            lastAutomatic = (key, Date())
-            generate(detected, task: .suggestion, ended: ended)
+            guard audioIDs[source] == id else { return }
+            finalizeTranscript(text, source: source, began: began, ended: ended)
         }
+    }
+
+    func markTranscriptionIncomplete(_ source: AudioSource) {
+        guard isOpen, source == .microphone || source == .meeting else { return }
+        var sources = record?.transcriptionIncompleteSources ?? []
+        guard !sources.contains(source) else { return }
+        sources.append(source)
+        // Read the old value before opening the optional record's modify access.
+        // Reading record again on the RHS traps under Swift exclusivity checks.
+        record?.transcriptionIncompleteSources = sources
+        scheduleCheckpoint()
+    }
+
+    func finalizeTranscript(_ text: String, source: AudioSource, began: Date, ended: Date) {
+        guard isOpen, let started = record?.startedAt else { return }
+        partial[source] = nil
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        transcriptionDelay = max(0, Date().timeIntervalSince(ended))
+        if options.practice && source == .microphone {
+            practiceSpeech.append(.init(text: clean, began: began, ended: ended))
+        }
+        append(.init(time: max(0, began.timeIntervalSince(started)), source: source, text: String(clean.prefix(6_000))))
+        guard !options.practice, automatic, !generating, !capturing, captureImage == nil,
+              composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !resourceCondition.reducesWork, canAnswer, phase == .active,
+              let detected = QuestionDetection.question(in: clean, source: source, locale: settings.speechLocale) else { return }
+        let key = QuestionDetection.normalized(detected)
+        if let (last, when) = lastAutomatic, last == key, Date().timeIntervalSince(when) < 25 { return }
+        lastAutomatic = (key, Date())
+        generate(detected, task: .suggestion, ended: ended)
     }
 
     private func append(_ line: TranscriptLine) {
@@ -768,7 +885,7 @@ final class LiveSession {
         let directory = vault.audioDirectory(session)
         do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]) }
         catch {
-            audioErrors[source] = AudioFailure.audioStorage.localizedDescription
+            audioIssues.captureFailed(source, message: AudioFailure.audioStorage.localizedDescription)
             return nil
         }
         audioPart[source, default: 0] += 1

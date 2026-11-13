@@ -39,4 +39,30 @@ final class ShortcutSettingsTests: XCTestCase {
         XCTAssertFalse(restored.camera.active)
         XCTAssertFalse(restored.camera.publishing)
     }
+
+    @MainActor
+    func testQuickStartUsesSavedSourcesWithoutEnablingRecordingOrCloudSpeech() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let model = AppModel(vault: Vault(directory: directory), credentials: TestCredentials())
+        var preferences = model.preferences
+        preferences.sessionMicrophone = false
+        preferences.sessionMeetingAudio = true
+        preferences.sessionScreenContext = true
+        preferences.speechProvider = .openAI
+        XCTAssertTrue(model.savePreferences(preferences))
+        var assistant = AssistantProfile(name: "Role")
+        assistant.retainSession = false
+        let options = model.quickSessionOptions(for: assistant)
+        XCTAssertFalse(options.microphone)
+        XCTAssertTrue(options.meetingAudio)
+        XCTAssertTrue(options.screenContext)
+        XCTAssertFalse(options.save)
+        XCTAssertFalse(options.saveAudio)
+        XCTAssertFalse(options.allowCloud)
+        XCTAssertFalse(options.automaticAnswers)
+        preferences.sessionScreenContext = nil
+        XCTAssertTrue(model.savePreferences(preferences))
+        XCTAssertFalse(model.quickSessionOptions(for: assistant).screenContext)
+    }
 }

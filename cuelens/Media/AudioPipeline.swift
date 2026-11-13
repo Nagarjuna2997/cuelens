@@ -5,6 +5,10 @@ enum AudioEvent: Sendable {
     case level(AudioSource, Float)
     case clipping(AudioSource, Bool)
     case transcription(AudioSource, Bool)
+    case speechFailure(AudioSource, String)
+    case speechRecovered(AudioSource)
+    case speechQueued(AudioSource, Bool)
+    case transcriptionIncomplete(AudioSource)
     case recording(AudioSource, Bool)
     case partial(AudioSource, String)
     case final(AudioSource, String, Date, Date)
@@ -108,11 +112,26 @@ final class AudioPipeline: @unchecked Sendable {
         }
     }
 
-    func stop() async {
+    func stop(finalizeSpeech: Bool = false) async {
         await withCheckedContinuation { continuation in
             queue.async {
-                self.stopOnQueue()
-                continuation.resume()
+                if finalizeSpeech, let nativeSpeech = self.speech as? AppleSpeech, !self.retired {
+                    self.retired = true
+                    self.accepting = false
+                    self.input?.stop()
+                    self.input = nil
+                    self.recorder = nil
+                    self.recordingURL = nil
+                    self.recordingStarted = false
+                    self.emit(.recording(self.source, false))
+                    nativeSpeech.finalizePending {
+                        self.stopOnQueue()
+                        continuation.resume()
+                    }
+                } else {
+                    self.stopOnQueue()
+                    continuation.resume()
+                }
             }
         }
     }
@@ -126,13 +145,21 @@ final class AudioPipeline: @unchecked Sendable {
             switch speechProvider {
             case .onDevice:
                 speech = try AppleSpeech(locale: locale, source: source, queue: queue, onText: { update in
-                    if !update.text.isEmpty { deliver(.transcription(source, true)) }
+                    if !update.text.isEmpty {
+                        deliver(.speechRecovered(source))
+                        deliver(.transcription(source, true))
+                    }
                     deliver(update.finalized ? .final(source, update.text, update.began, update.ended) : .partial(source, update.text))
-                }, onError: { [weak self] in self?.reportSpeechFailure($0.localizedDescription) })
+                }, onError: { [weak self] in self?.reportSpeechFailure($0.localizedDescription) },
+                   onQueued: { deliver(.speechQueued(source, $0)) },
+                   onIncomplete: { deliver(.transcriptionIncomplete(source)) })
             case .openAI:
                 guard let apiKey else { throw ProviderError.credentialUnavailable }
                 speech = try RealtimeSpeech(key: apiKey, locale: locale, source: source, onText: { update in
-                    if !update.text.isEmpty { deliver(.transcription(source, true)) }
+                    if !update.text.isEmpty {
+                        deliver(.speechRecovered(source))
+                        deliver(.transcription(source, true))
+                    }
                     deliver(update.finalized ? .final(source, update.text, update.began, update.ended) : .partial(source, update.text))
                 }, onSend: { deliver(.cloudAudio(source)) }, onError: { [weak self] error in
                     self?.queue.async { [weak self] in
@@ -206,8 +233,9 @@ final class AudioPipeline: @unchecked Sendable {
 
     private func reportSpeechFailure(_ message: String) {
         emit(.transcription(source, false))
-        let continuation = recordingURL == nil ? "Audio input remains on." : "Audio recording continues."
-        emit(.failure(source, "\(message) \(continuation)", recoverable: false))
+        let continuation = retired ? "Audio capture has stopped."
+            : (recordingURL == nil ? "Audio input remains on." : "Audio recording continues.")
+        emit(.speechFailure(source, "\(message) \(continuation)"))
     }
 
     private func stopOnQueue() {
@@ -222,6 +250,7 @@ final class AudioPipeline: @unchecked Sendable {
         recordingStarted = false
         emit(.recording(source, false))
         emit(.transcription(source, false))
+        emit(.speechQueued(source, false))
     }
 
     static func level(_ pcm: AVAudioPCMBuffer) -> Float {

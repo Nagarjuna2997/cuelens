@@ -86,7 +86,6 @@ struct AssistantEditor: View {
                         .disabled((profile.customResponses?.count ?? 0) >= 12)
                 }
                 Section("Session preferences") {
-                    Toggle("Suggest answers automatically", isOn: $profile.liveSuggestions)
                     Toggle("Save transcripts and suggestions for this assistant", isOn: $profile.retainSession)
                 }
             }

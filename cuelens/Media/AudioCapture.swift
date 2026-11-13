@@ -29,6 +29,9 @@ struct Microphone: Identifiable, Equatable {
 enum AudioFailure: LocalizedError, Equatable {
     case microphonePermission, microphoneUnavailable, speechPermission, speechUnavailable, speechInterrupted
     case systemAudio(Int32), invalidFormat, inputChanged, inputInterrupted, tooSlow, audioStorage, cloudStream
+    case speechService(String, Int)
+    case speechTimeout
+    case speechDrainTimeout
 
     var errorDescription: String? {
         switch self {
@@ -37,11 +40,14 @@ enum AudioFailure: LocalizedError, Equatable {
         case .speechPermission: "Speech Recognition access is off. Enable CueLens in Privacy & Security → Speech Recognition."
         case .speechUnavailable: "Apple on-device speech is unavailable for this locale. Choose another locale or OpenAI Realtime."
         case .speechInterrupted: "Apple on-device transcription stopped. Retry the audio source."
+        case .speechService(let domain, let code): "Apple speech could not transcribe this turn (\(domain) \(code)). Retry the audio source if this continues."
+        case .speechTimeout: "Apple speech did not return text for the last audio turn. Retry the source if speech is still missing."
+        case .speechDrainTimeout: "Some buffered audio could not be transcribed before the session finished. The saved transcript is incomplete."
         case .systemAudio(let status): "Meeting audio couldn’t start (Core Audio \(status)). Check Screen & System Audio Recording and retry."
         case .invalidFormat: "CueLens couldn’t read the input audio format. Reconnect the device or choose another source."
         case .inputChanged: "The audio device changed. Retry this source to use the current device."
         case .inputInterrupted: "The audio input stopped. Check the selected device, then retry."
-        case .tooSlow: "The audio stream is behind. Retry the source or use Apple on-device speech."
+        case .tooSlow: "Transcription is behind the audio. A buffered turn was skipped. Retry the source or reduce overlapping audio."
         case .audioStorage: "CueLens couldn’t write raw audio. Transcription can continue. Check free storage."
         case .cloudStream: "OpenAI Realtime stopped. Check your API key, access, and network connection, then retry."
         }

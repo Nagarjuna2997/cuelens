@@ -49,15 +49,21 @@ final class CueLensUITests: XCTestCase {
             XCTAssertEqual(toggle.value as? String, "0")
         }
         start.click()
-        let minimize = app.buttons["compactSession"]
+        let minimize = app.buttons["minimizeSession"]
         XCTAssertTrue(minimize.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["startSession"].exists)
         XCTAssertFalse(app.buttons["sendQuestion"].isEnabled)
         minimize.click()
-        let end = app.buttons["endSession"]
+        let restore = app.buttons["restoreSession"]
+        XCTAssertTrue(restore.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["sendQuestion"].exists)
+        restore.click()
+        XCTAssertTrue(app.buttons["sendQuestion"].waitForExistence(timeout: 5))
+        let end = app.buttons["barEndSession"]
         XCTAssertTrue(end.waitForExistence(timeout: 5))
         end.click()
         // Ending stays in the bar; it must not reopen the full setup window.
-        XCTAssertTrue(app.buttons["Set Up Session"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["quickStartSession"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["startSession"].exists)
         XCTAssertFalse(end.exists)
     }

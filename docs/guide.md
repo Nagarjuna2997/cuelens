@@ -20,7 +20,7 @@ Manual **Answer** sends the question, recent transcript, relevant assistant mate
 
 ## Camera preview
 
-Click **Start Camera** in Studio. Allow camera access when macOS requests it. The **Me** panel shows your local processed image. Camera settings provide a supported source and format picker, center/thirds framing, crop controls, calibration, and picture effects. Use **Before and After** to compare, **Bypass** for the original camera image, and **Float Video Preview** to move and resize the preview independently. See [the camera guide](camera.md) for outgoing-video setup.
+Click **Start Camera** in the Me panel. Allow camera access when macOS requests it. The **Me** panel shows your local processed image. Camera settings provide a supported source and format picker, center/thirds framing, crop controls, calibration, and picture effects. **Before and After** and preview guides become available after video starts. Use **Bypass** for the original camera image and the panel's **Float Video Preview** button to move and resize it independently. See [the camera guide](camera.md) for outgoing-video setup.
 
 ## Start a conversation
 
@@ -29,16 +29,16 @@ Click **Start Camera** in Studio. Allow camera access when macOS requests it. Th
 3. Open **Session preferences** to choose the microphone and run **Test Audio**. Speak or play a known sample during its eight-second check. Use the **Permissions** menu for Microphone, Screen & System Audio, and Speech Recognition settings if access is denied.
 4. Enable **Save an audio recording** if you want retained CAF audio. It starts off for each setup. **Save transcript and answers** controls text retention. Recording also enables saved session text.
 5. Enable **Enable screen context** if you want image context. Enable **Answer meeting questions automatically** if desired. Manual Answer remains available with a connected provider.
-6. Choose **Open in the compact window** to launch over another application, or use the full Studio. Click **Start Session** when participants have given any required consent and assistance is permitted.
+6. Click **Start Session** when participants have given any required consent and assistance is permitted. The main Studio hides, and the floating bar plus live response/transcript panel appear over your meeting.
 
-The transcript appears on the left, answers in the center, and video on the right. Resize the dividers to suit your screen. The status bar separates microphone signal, transcription provider, camera state, and answer timing. Audio capture and recording can continue after a transcription error. Read the source error and use **Retry** when ready.
+The floating session shows the transcript on the left and answers on the right. Resize its divider, or select a separate transcript in Quick Settings. The Camera button opens an independent movable preview. The full Studio remains accessible through an explicit **Open Setup** action. The status bar separates microphone signal, transcription provider, camera state, and answer timing. Audio capture and recording can continue after a transcription error. Read the source error and use **Retry** when ready.
 
 ## Capture and answer
 
 - **⌘X** captures the full display under the pointer when screen capture is enabled. CueLens excludes its own windows from that image. This affects CueLens’s screenshot only. The image stays in memory until you send it or remove it.
 - The capture menu also offers **Capture a Window** and **Choose an Image…**. Review the preview before sending.
 - **⌘C** sends the attached image and question, sends the typed question, or answers the latest transcript question. Image requests default to explaining and solving the visible coding problem.
-- The response toolbar provides previous/next answers, pinned responses, response styles, length, retry, and explicit backup-provider selection. Expand **Details** when an answer includes a longer explanation.
+- The response toolbar provides previous/next answers, pinned responses, response styles, length, retry, and explicit backup-provider selection. Headings and lists use native formatting; code has its own Copy control. Expand **Details** when an answer includes a longer explanation. Typed follow-ups receive a bounded excerpt of the latest three question/draft pairs, marked as AI-generated context rather than proof of your experience.
 - **Cancel** stops the current request. A source or provider error explains what to retry. API credentials and model access must be configured before generating text.
 
 | Shortcut | Action during a live session |
@@ -52,9 +52,15 @@ The first two shortcuts replace the usual Copy and Cut shortcuts while the sessi
 
 ## Compact window and ending
 
-Use **Minimize** in Studio to move the conversation into a floating panel. Drag its grip and resize the edges. **Minimize** reduces it to the bar, and **Restore** brings back the response panel. **Quick Settings** controls background transparency, answer text size, theme, and docked or separate transcripts. Text remains solid as the panel background changes.
+The main app and live overlays are separate. Starting a session hides the main app and leaves a persistent floating control bar beside the response panel. Drag either window independently and resize the response panel. **Minimize** hides the response and transcript while retaining the bar; **Restore** brings them back without opening Studio. **Quick Settings** controls background transparency, answer text size, theme, and docked or separate transcripts. Text remains solid as the panel background changes.
+
+Use **Audio sources** on the bar or transcript to enable or disable Microphone and Meeting audio, inspect each source, and retry a failed connection. Conversation choices are remembered for the next session. Practice audio choices stay within that practice session and do not overwrite your conversation defaults. The idle state reads **Ready to start**; an active session with neither source selected reads **Sources disabled**.
+
+The idle bar’s **Start Session** button starts directly with your selected assistant, saved audio-source choices, and explicitly enabled screen-context preference. Quick start keeps audio recording and cloud speech off. Use **Open Setup** in the bar menu to choose recording or other session preferences before starting. You can enable or disable screen context in live Quick Settings; disabling it discards a pending image.
 
 Click **End** in the session toolbar or the stop button on the bar. Audio and camera stop, retained session content is saved, and the compact bar reports the result. A pending save can be retried. Open History when you want to inspect the result.
+
+End can briefly show **Saving session…** while already captured local speech finishes. Quitting CueLens also waits for session saving. If saving fails, the app stays open so you can retry. History identifies any audio source whose transcription could not finish.
 
 ## Repeatable interview practice
 
@@ -62,7 +68,7 @@ Click **End** in the session toolbar or the stop button on the bar. Audio and ca
 2. Choose whether hints are available and whether to use the microphone. Click **Start Practice** for a baseline question from the selected API.
 3. Type your answer and submit it, or speak and click **Review Spoken Answer**. Feedback covers correctness, relevance, structure, and clarity, then gives an example grounded in the supplied facts.
 4. Click **Try Again** to answer the same question, **Hint** when enabled, or **Next Question** for an adaptive follow-up.
-5. Use **Review Tomorrow** to schedule the latest topic. End the session with saving enabled. **Practice** shows role-specific attempts, due reviews, and feedback. **Practice This Topic** starts a typed review session.
+5. Use **Review Tomorrow** to schedule the latest topic. The control confirms that the review is scheduled. End the session with saving enabled. **Practice** shows role-specific attempts, due reviews, and feedback. **Practice This Topic** starts a review with your saved microphone preference and meeting audio off; you can also type the answer.
 
 Words, filler phrases, and repetition are estimated from transcript text. Pace and long pauses require usable speech timestamps. Recognition may omit fillers. These measurements are separate from camera posture cues. Saved progress adapts practice requests without training model weights or uploading camera recordings.
 

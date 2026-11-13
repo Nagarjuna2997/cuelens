@@ -153,6 +153,10 @@ private struct SessionDetails: View {
                         }
                     }
                     Text("Transcript").font(.headline)
+                    if let notice = session.transcriptionNotice {
+                        Label(notice, systemImage: "exclamationmark.bubble")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
                     if filteredLines.isEmpty { Text(query.isEmpty ? "No transcript was saved." : "No matching lines.").foregroundStyle(.secondary) }
                     ForEach(filteredLines) { line in
                         HStack(alignment: .top) {

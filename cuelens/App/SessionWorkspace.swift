@@ -35,7 +35,7 @@ struct SessionWorkspace: View {
                 HSplitView {
                     if docked && showTranscript {
                         TranscriptColumn(live: live, dragging: floating, showTypes: typesVisible && responsePlacement == .transcript,
-                                         hide: { showTranscript = false })
+                                         hide: { showTranscript = false }, toggleAudio: toggleAudio)
                             .frame(minWidth: 160, idealWidth: min(210, transcriptMaximum), maxWidth: transcriptMaximum, maxHeight: .infinity)
                     }
                     answers
@@ -137,9 +137,13 @@ struct SessionWorkspace: View {
             Picker("Length", selection: $live.length) {
                 ForEach(AnswerLength.allCases) { Text($0.rawValue).tag($0) }
             }
-            Toggle("Automatic Answers", isOn: $live.automatic).disabled(!live.canAnswer)
+            if !live.options.practice {
+                Toggle("Automatic Answers", isOn: $live.automatic).disabled(!live.canAnswer)
+            }
             Button("Regenerate") { live.regenerate() }.disabled(live.question.isEmpty)
-            Button("Technical Explanation") { live.technicalAnswer() }.disabled(live.question.isEmpty)
+            if !live.options.practice {
+                Button("Technical Explanation") { live.technicalAnswer() }.disabled(live.question.isEmpty)
+            }
             if let backup = live.backup { Button("Use \(backup.shortName)") { live.useBackup() } }
             Divider()
             Button("Keyboard Shortcuts…", systemImage: "command") { showKeys = true }
@@ -231,6 +235,7 @@ struct SessionWorkspace: View {
                 if live.generating && live.answer.isEmpty { ProgressView("Waiting for first text…").controlSize(.small) }
                 if !live.answer.isEmpty && (!live.options.practice || live.answer != live.practiceQuestion) {
                     AnswerText(text: live.answer, size: floating ? overlay.fontSize : 17)
+                        .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("streamedAnswer")
                 }
                 if let error = live.answerError {
@@ -244,9 +249,13 @@ struct SessionWorkspace: View {
                         if live.options.practiceHints {
                             Button("Hint") { live.requestPracticeHint() }.disabled(live.practiceQuestion.isEmpty)
                         }
-                        if !live.practiceAttempts.isEmpty {
+                        if !live.practiceAttempts.isEmpty, live.practiceAttempts.last?.nextReview == nil {
                             Button("Review Tomorrow") { live.schedulePracticeReview() }
                         }
+                    }
+                    if let review = live.practiceAttempts.last?.nextReview {
+                        Label("Review scheduled \(review.formatted(date: .abbreviated, time: .omitted))", systemImage: "checkmark.circle")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     HStack {
                         Button("Next Question") { live.nextPracticeQuestion() }.disabled(!live.canAnswer)
@@ -263,6 +272,11 @@ struct SessionWorkspace: View {
         Button(title, systemImage: systemImage, action: action)
             .labelStyle(.iconOnly).buttonStyle(.borderless).help(title)
     }
+
+    private func toggleAudio(_ source: AudioSource) {
+        if let model { model.toggleSessionAudio(source) }
+        else { live.toggle(source) }
+    }
 }
 
 struct SeparateTranscriptPanel: View {
@@ -273,7 +287,7 @@ struct SeparateTranscriptPanel: View {
     var body: some View {
         TranscriptColumn(live: model.live, dragging: true,
                          showTypes: controller.showSeparateResponseTypes && model.workspace.overlay?.responsePlacement != .answers,
-                         hide: { controller.toggleSeparateTranscript() })
+                         hide: { controller.toggleSeparateTranscript() }, toggleAudio: model.toggleSessionAudio)
             .background(Color(nsColor: .windowBackgroundColor).opacity(reduceTransparency ? 1 : (model.workspace.overlay ?? OverlayPreferences()).liveBackgroundOpacity))
             .clipShape(RoundedRectangle(cornerRadius: 11))
     }
@@ -284,6 +298,7 @@ private struct TranscriptColumn: View {
     let dragging: Bool
     let showTypes: Bool
     let hide: () -> Void
+    let toggleAudio: (AudioSource) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -296,8 +311,8 @@ private struct TranscriptColumn: View {
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 Menu {
-                    Button(live.enabled.contains(.microphone) ? "Disable Microphone" : "Enable Microphone") { live.toggle(.microphone) }
-                    Button(live.enabled.contains(.meeting) ? "Disable Meeting Audio" : "Enable Meeting Audio") { live.toggle(.meeting) }
+                    Button(live.enabled.contains(.microphone) ? "Disable Microphone" : "Enable Microphone") { toggleAudio(.microphone) }
+                    Button(live.enabled.contains(.meeting) ? "Disable Meeting Audio" : "Enable Meeting Audio") { toggleAudio(.meeting) }
                     if live.activeSources.contains(.microphone) {
                         Button("Microphone Effects…") { Microphone.showSystemModes() }
                     }
@@ -324,6 +339,10 @@ private struct TranscriptColumn: View {
                         if live.activeSources.contains(source) {
                             ProgressView(value: min(1, Double(live.levels[source] ?? 0) * 12))
                                 .accessibilityLabel("\(source.rawValue) audio level")
+                        }
+                        if live.speechQueuedSources.contains(source) {
+                            Text("Queued").font(.caption2).foregroundStyle(.secondary)
+                                .help("Speech is buffered while another audio source is transcribed.")
                         }
                         Spacer(minLength: 0)
                         if live.audioErrors[source] != nil && live.enabled.contains(source) && live.phase == .active {
@@ -421,13 +440,124 @@ private struct ResponseTypeStrip: View {
 
 }
 
+enum AnswerMarkdownBlock: Equatable {
+    case paragraph(String)
+    case heading(level: Int, text: String)
+    case listItem(marker: String, depth: Int, text: String)
+    case quote(String)
+    case code(language: String, text: String)
+    case divider
+}
+
+enum AnswerMarkdown {
+    static func blocks(in content: String) -> [AnswerMarkdownBlock] {
+        var result = [AnswerMarkdownBlock]()
+        var paragraph = [String]()
+        var code = [String]()
+        var fence: (character: Character, count: Int, language: String)?
+        var continuesList = false
+
+        func flushParagraph() {
+            if !paragraph.isEmpty { result.append(.paragraph(paragraph.joined(separator: " "))) }
+            paragraph.removeAll(keepingCapacity: true)
+        }
+
+        for line in content.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if let active = fence {
+                let closing = trimmed.prefix { $0 == active.character }
+                if closing.count >= active.count && trimmed.dropFirst(closing.count).trimmingCharacters(in: .whitespaces).isEmpty {
+                    result.append(.code(language: active.language, text: code.joined(separator: "\n")))
+                    code.removeAll(keepingCapacity: true)
+                    fence = nil
+                } else {
+                    code.append(line)
+                }
+                continue
+            }
+            if let character = trimmed.first, character == "`" || character == "~" {
+                let opening = trimmed.prefix { $0 == character }
+                if opening.count >= 3 {
+                    flushParagraph()
+                    fence = (character, opening.count, trimmed.dropFirst(opening.count).trimmingCharacters(in: .whitespaces))
+                    continuesList = false
+                    continue
+                }
+            }
+            if trimmed.isEmpty {
+                flushParagraph()
+                continuesList = false
+                continue
+            }
+            let hashes = trimmed.prefix { $0 == "#" }.count
+            if (1...6).contains(hashes), let next = trimmed.dropFirst(hashes).first, next.isWhitespace {
+                flushParagraph()
+                var title = trimmed.dropFirst(hashes).trimmingCharacters(in: .whitespaces)
+                let trailingHashes = title.reversed().prefix { $0 == "#" }.count
+                if trailingHashes > 0, let prior = title.dropLast(trailingHashes).last, prior.isWhitespace {
+                    title = title.dropLast(trailingHashes).trimmingCharacters(in: .whitespaces)
+                }
+                result.append(.heading(level: hashes, text: title))
+                continuesList = false
+                continue
+            }
+            let compact = trimmed.filter { !$0.isWhitespace }
+            if compact.count >= 3, let first = compact.first, "-*_".contains(first), compact.allSatisfy({ $0 == first }) {
+                flushParagraph()
+                result.append(.divider)
+                continuesList = false
+                continue
+            }
+            if trimmed.first == ">" {
+                flushParagraph()
+                result.append(.quote(trimmed.dropFirst().trimmingCharacters(in: .whitespaces)))
+                continuesList = false
+                continue
+            }
+            let indentation = line.prefix { $0 == " " || $0 == "\t" }.reduce(0) { $0 + ($1 == "\t" ? 4 : 1) }
+            if let item = listItem(trimmed) {
+                flushParagraph()
+                result.append(.listItem(marker: item.marker, depth: min(4, indentation / 2), text: item.text))
+                continuesList = true
+                continue
+            }
+            if continuesList, case let .listItem(marker, depth, text) = result.last, indentation > depth * 2 {
+                result[result.count - 1] = .listItem(marker: marker, depth: depth, text: text + " " + trimmed)
+            } else {
+                paragraph.append(trimmed)
+                continuesList = false
+            }
+        }
+        flushParagraph()
+        // Keep an incomplete streaming fence in its code block, including its
+        // indentation and any Markdown-like source comments.
+        if let fence { result.append(.code(language: fence.language, text: code.joined(separator: "\n"))) }
+        return result
+    }
+
+    private static func listItem(_ line: String) -> (marker: String, text: String)? {
+        if let first = line.first, "-*+".contains(first), line.dropFirst().first?.isWhitespace == true {
+            return ("•", line.dropFirst().trimmingCharacters(in: .whitespaces))
+        }
+        let digits = line.prefix { $0.isASCII && $0.isNumber }
+        guard !digits.isEmpty, digits.count <= 9 else { return nil }
+        let suffix = line.dropFirst(digits.count)
+        guard let delimiter = suffix.first, delimiter == "." || delimiter == ")", suffix.dropFirst().first?.isWhitespace == true else { return nil }
+        return (String(digits) + ".", suffix.dropFirst().trimmingCharacters(in: .whitespaces))
+    }
+}
+
 private struct AnswerText: View {
     let text: String
     let size: Double
     @State private var copied = false
 
     var body: some View {
-        let parts = text.components(separatedBy: "\n### Details")
+        let blocks = AnswerMarkdown.blocks(in: text)
+        let detailsIndex = blocks.firstIndex { block in
+            if case let .heading(level, title) = block { return level == 3 && title == "Details" }
+            return false
+        }
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Spacer(minLength: 0)
@@ -436,48 +566,57 @@ private struct AnswerText: View {
                     copied = NSPasteboard.general.setString(text, forType: .string)
                 }.buttonStyle(.borderless).font(.caption).accessibilityIdentifier("copyResponse")
             }
-            markdown(parts.first ?? text)
-            if parts.count > 1 {
-                DisclosureGroup("Details") { markdown(parts.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)) }
+            markdown(Array(blocks.prefix(detailsIndex ?? blocks.count)))
+            if let detailsIndex {
+                DisclosureGroup("Details") { markdown(Array(blocks.dropFirst(detailsIndex + 1))) }
             }
         }
         .onChange(of: text) { copied = false }
     }
 
-    private func markdown(_ content: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(Array(blocks(in: content).enumerated()), id: \.offset) { _, block in
-                if let language = block.language {
-                    AnswerCodeBlock(code: block.content, language: language, size: size)
-                } else {
-                    let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-                    Text((try? AttributedString(markdown: block.content, options: options)) ?? AttributedString(block.content))
-                        .font(.system(size: size))
-                        .textSelection(.enabled)
-                        .lineSpacing(4)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+    private func markdown(_ blocks: [AnswerMarkdownBlock]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case let .code(language, text):
+                    AnswerCodeBlock(code: text, language: language, size: size)
+                case let .heading(level, text):
+                    inline(text)
+                        .font(.system(size: size + (level == 1 ? 6 : level == 2 ? 3 : 1), weight: .semibold))
+                        .padding(.top, 5)
+                        .accessibilityAddTraits(.isHeader)
+                case let .paragraph(text):
+                    prose(text)
+                case let .listItem(marker, depth, text):
+                    HStack(alignment: .firstTextBaseline, spacing: 7) {
+                        Text(marker).font(.system(size: size).monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(minWidth: marker == "•" ? 12 : 20, alignment: .trailing)
+                        prose(text)
+                    }.padding(.leading, CGFloat(depth) * 14)
+                case let .quote(text):
+                    HStack(alignment: .top, spacing: 10) {
+                        RoundedRectangle(cornerRadius: 2).fill(.secondary.opacity(0.4)).frame(width: 3)
+                        prose(text).foregroundStyle(.secondary)
+                    }.fixedSize(horizontal: false, vertical: true)
+                case .divider:
+                    Divider().padding(.vertical, 3)
                 }
             }
         }
     }
 
-    private func blocks(in content: String) -> [(content: String, language: String?)] {
-        var result = [(content: String, language: String?)]()
-        var lines = [String]()
-        var language: String?
-        for line in content.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("```") {
-                if !lines.isEmpty { result.append((lines.joined(separator: "\n"), language)) }
-                lines.removeAll(keepingCapacity: true)
-                language = language == nil ? String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces) : nil
-            } else {
-                lines.append(line)
-            }
-        }
-        // An unfinished fence is still code while the provider is streaming.
-        if !lines.isEmpty { result.append((lines.joined(separator: "\n"), language)) }
-        return result
+    private func inline(_ content: String) -> Text {
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        return Text((try? AttributedString(markdown: content, options: options)) ?? AttributedString(content))
+    }
+
+    private func prose(_ content: String) -> some View {
+        inline(content)
+            .font(.system(size: size))
+            .textSelection(.enabled)
+            .lineSpacing(4)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

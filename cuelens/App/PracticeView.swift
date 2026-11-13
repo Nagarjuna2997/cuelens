@@ -70,11 +70,17 @@ struct PracticeView: View {
         }
     }
     private func review(_ attempt: PracticeAttempt) {
+        guard !model.live.isOpen, model.live.pendingSave == nil else { return }
         guard let assistant = model.activeAssistants.first(where: { $0.id == model.selectedAssistantID }) else { return }
         let style = sessions.first(where: { $0.practiceAttempts?.contains(where: { $0.id == attempt.id }) == true })?.practiceStyle ?? .technical
         model.live.start(assistant: assistant, settings: model.preferences,
-                         options: .init(microphone: false, save: true, practice: true, practiceStyle: style,
+                         options: .init(microphone: model.preferences.sessionMicrophone ?? true,
+                                        meetingAudio: false, save: true, practice: true, practiceStyle: style,
                                         reviewTopic: attempt.reviewTopic ?? attempt.question))
+        guard model.live.isOpen else { return }
+        model.overlay.register()
+        model.overlay.show(focus: true)
+        model.minimizeMainWindow()
     }
 }
 

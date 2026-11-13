@@ -10,9 +10,11 @@ enum SessionExport {
     }
 
     static func transcript(_ session: MeetingSession) -> String {
-        session.transcript.map { line in
+        let lines = session.transcript.map { line in
             "[\(line.timestamp)] \(line.source.rawValue)\(line.provisional == true ? " (unfinalized)" : ""): \(line.text)"
         }.joined(separator: "\n")
+        guard let notice = session.transcriptionNotice else { return lines }
+        return notice + (lines.isEmpty ? "" : "\n\n" + lines)
     }
 
     static func render(_ session: MeetingSession, format: Format) -> String {

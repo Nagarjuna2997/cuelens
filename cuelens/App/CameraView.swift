@@ -64,7 +64,7 @@ struct CameraStudioPanel: View {
                         }
                     }.padding(20)
                 }
-                .aspectRatio(0.95, contentMode: .fit)
+                .frame(height: 240)
             }
             if let error = preview.error {
                 Text(error).font(.caption).foregroundStyle(.secondary)
@@ -95,10 +95,11 @@ struct CameraStudioPanel: View {
                 Button("Stop", systemImage: "stop.fill") { preview.stop() }
                     .accessibilityIdentifier("cameraPreviewToggle")
             }
-            Button("Recenter", systemImage: "viewfinder") { preview.recenter() }.disabled(!preview.active)
+            Button("Recenter", systemImage: "viewfinder") { preview.recenter() }
+                .disabled(!preview.active || !preview.framing.enabled || preview.effects.bypass)
             Toggle(isOn: $preview.framing.locked) { Label("Lock Framing", systemImage: preview.framing.locked ? "lock.fill" : "lock.open") }
                 .toggleStyle(.button).labelStyle(.iconOnly).help("Lock framing")
-                .disabled(!preview.active || preview.effects.bypass)
+                .disabled(!preview.active || !preview.framing.enabled || preview.effects.bypass)
         }.controlSize(.small)
     }
 
@@ -106,8 +107,10 @@ struct CameraStudioPanel: View {
         HStack(spacing: 7) {
             Toggle(isOn: $compare) { Label("Before and After", systemImage: "rectangle.split.2x1") }
                 .toggleStyle(.button).labelStyle(.iconOnly).help("Compare original and processed video")
+                .disabled(preview.frame == nil)
             Toggle(isOn: $showGuides) { Label("Preview Guides", systemImage: "square.grid.3x3") }
                 .toggleStyle(.button).labelStyle(.iconOnly).help("Guides appear only in your preview")
+                .disabled(preview.frame == nil)
             Toggle(isOn: $preview.effects.bypass) { Text("Bypass") }.toggleStyle(.button).help("Use original camera video instantly")
         }.controlSize(.small)
     }
@@ -117,6 +120,7 @@ struct CameraStudioPanel: View {
             if let label { Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary) }
             Image(decorative: image, scale: 1)
                 .resizable().aspectRatio(contentMode: .fit)
+                .frame(maxHeight: 360)
                 .overlay {
                     if guides {
                         GeometryReader { geometry in
@@ -160,13 +164,7 @@ struct CameraView: View {
                         Text("Camera default").tag(Optional<CameraFormatChoice>.none)
                         ForEach(preview.formatChoices(for: cameraID)) { Text($0.label).tag(Optional($0)) }
                     }.disabled(preview.active || preview.starting)
-                    HStack {
-                        Text("Stop the camera to change its source or format.").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        if !preview.active && !preview.starting {
-                            Button("Start Selected Camera") { preview.start(deviceID: cameraID) }.buttonStyle(.borderedProminent)
-                        }
-                    }
+                    Text("Stop the camera to change its source or format.").font(.caption).foregroundStyle(.secondary)
                 }
                 CameraStudioPanel(model: model, preview: preview, showsSettingsButton: false)
                 CueCard {

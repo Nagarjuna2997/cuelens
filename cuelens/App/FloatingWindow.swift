@@ -9,10 +9,11 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
 
     private weak var model: AppModel?
     private var panel: CuePanel?
+    @ObservationIgnored private var barPanel: CuePanel?
     @ObservationIgnored private var transcriptPanel: CuePanel?
     private(set) var mode = Mode.bar
     private(set) var visible = false
-    private var expandedSize: NSSize?
+    private var expandedFrame: NSRect?
     private(set) var shortcutError: String?
     private(set) var opacity = OverlayPreferences().opacity
     var showSeparateTranscript = true
@@ -50,17 +51,17 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
         shortcutError = hotkeys?.register(preferences: preferences, live: model.live.isOpen)
     }
 
-    var showsBarOpacity: Bool { mode == .bar && model?.live.isOpen == false }
+    var showsBarOpacity: Bool { model?.live.isOpen == false }
 
-    private var effectiveOpacity: Double { showsBarOpacity ? opacity : 1 }
+    private var barOpacity: Double { showsBarOpacity ? opacity : 1 }
 
     func toggle() {
         if visible { hide() }
         else { show() }
     }
 
-    func show() {
-        display(model?.live.isOpen == true ? .session : .bar)
+    func show(focus: Bool = false) {
+        display(model?.live.isOpen == true ? .session : .bar, focus: focus)
     }
 
     func showTest() { display(.test) }
@@ -69,7 +70,8 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
 
     func hide() {
         saveOpacity()
-        if mode == .session { expandedSize = panel?.frame.size }
+        rememberResponseFrame()
+        barPanel?.orderOut(nil)
         panel?.orderOut(nil)
         transcriptPanel?.orderOut(nil)
         visible = false
@@ -79,7 +81,7 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
         let newValue = OverlayPreferences.clampedOpacity(value)
         guard newValue != opacity else { return }
         opacity = newValue
-        panel?.alphaValue = effectiveOpacity
+        barPanel?.alphaValue = barOpacity
         opacitySave?.cancel()
         opacitySave = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(250))
@@ -99,7 +101,7 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
 
     func applyPreferences() {
         register()
-        expandedSize = nil
+        expandedFrame = nil
         refreshAppearance()
     }
 
@@ -125,6 +127,7 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
         case .dark: appearance = NSAppearance(named: .darkAqua)
         }
         panel?.appearance = appearance
+        barPanel?.appearance = appearance
         transcriptPanel?.appearance = appearance
         refreshSeparateTranscript(appearance: appearance)
     }
@@ -162,43 +165,91 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
         }
         register()
         guard visible, mode != .test else { return }
-        panel?.alphaValue = effectiveOpacity
+        barPanel?.alphaValue = barOpacity
         if model?.live.isOpen != true { display(.bar) }
     }
 
-    private func display(_ mode: Mode) {
+    private func rememberResponseFrame() {
+        if mode == .session, let panel, panel.isVisible { expandedFrame = panel.frame }
+    }
+
+    private func display(_ requestedMode: Mode, focus: Bool = false) {
         guard let model else { return }
+        rememberResponseFrame()
+        mode = requestedMode
+        visible = true
+        showControlBar()
+        if requestedMode == .bar {
+            panel?.orderOut(nil)
+            transcriptPanel?.orderOut(nil)
+            refreshAppearance()
+            return
+        }
+
         let window = panel ?? makeMainPanel()
-        let firstDisplay = panel == nil
-        if self.mode == .session, let panel, visible { expandedSize = panel.frame.size }
-        self.mode = mode
         let settings = model.workspace.overlay ?? OverlayPreferences()
+        let bounds = barPanel?.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
         let target: NSSize
         let minimum: NSSize
-        switch mode {
-        case .bar: target = NSSize(width: 440, height: 52); minimum = target
-        case .session:
-            target = expandedSize ?? (settings.compact ? NSSize(width: 740, height: 440) : NSSize(width: 900, height: 500))
+        if requestedMode == .session {
+            target = expandedFrame?.size ?? (settings.compact ? NSSize(width: 740, height: 440) : NSSize(width: 900, height: 500))
             minimum = NSSize(width: 630, height: 350)
-        case .test: target = NSSize(width: 360, height: 115); minimum = target
+        } else {
+            target = NSSize(width: 360, height: 115)
+            minimum = target
         }
-        let screen = window.screen ?? NSScreen.main ?? NSScreen.screens.first
-        let bounds = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
-        let old = window.frame
         let size = NSSize(width: min(target.width, bounds.width), height: min(target.height, bounds.height))
-        window.minSize = minimum
-        window.maxSize = mode == .session ? NSSize(width: bounds.width, height: bounds.height) : target
-        let x = firstDisplay ? bounds.midX - size.width / 2 : old.midX - size.width / 2
-        let top = firstDisplay ? bounds.maxY - 14 : old.maxY
+        window.minSize = NSSize(width: min(minimum.width, bounds.width), height: min(minimum.height, bounds.height))
+        window.maxSize = requestedMode == .session ? bounds.size : target
+        let anchor = barPanel?.frame ?? bounds
+        let savedFrame = requestedMode == .session ? expandedFrame : nil
+        let x = savedFrame?.minX ?? (anchor.midX - size.width / 2)
+        let top = savedFrame?.maxY ?? (anchor.minY - 10)
         let frame = NSRect(x: max(bounds.minX, min(bounds.maxX - size.width, x)),
                            y: max(bounds.minY, min(bounds.maxY - size.height, top - size.height)),
                            width: size.width, height: size.height)
-        window.alphaValue = effectiveOpacity
+        // Live transparency belongs to the background view. Keep text and controls opaque.
+        window.alphaValue = 1
         window.setFrame(frame, display: true, animate: false)
         window.orderFrontRegardless()
         panel = window
-        visible = true
+        barPanel?.orderFrontRegardless()
         refreshAppearance()
+        if focus, requestedMode == .session {
+            // Explicit Start/Restore focuses only the nonactivating response panel.
+            // Hotkeys use focus:false so the meeting keeps its keyboard focus.
+            window.makeKeyAndOrderFront(nil)
+            barPanel?.orderFrontRegardless()
+        }
+    }
+
+    private func showControlBar() {
+        guard let model else { return }
+        let firstDisplay = barPanel == nil
+        let window: CuePanel
+        if let barPanel {
+            window = barPanel
+        } else {
+            window = createPanel(title: "CueLens Floating Bar", identifier: "cuelens.bar")
+            window.contentView = NSHostingView(rootView: FloatingBar(model: model, controller: self)
+                .ignoresSafeArea().tint(CueStyle.accent))
+            barPanel = window
+        }
+        let bounds = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+            ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
+        let target = NSSize(width: model.live.isOpen ? 560 : 440, height: 54)
+        let size = NSSize(width: min(target.width, bounds.width), height: target.height)
+        let old = window.frame
+        let x = firstDisplay ? bounds.midX - size.width / 2 : old.midX - size.width / 2
+        let top = firstDisplay ? bounds.maxY - 14 : old.maxY
+        window.minSize = size
+        window.maxSize = size
+        window.alphaValue = barOpacity
+        window.setFrame(NSRect(x: max(bounds.minX, min(bounds.maxX - size.width, x)),
+                               y: max(bounds.minY, min(bounds.maxY - size.height, top - size.height)),
+                               width: size.width, height: size.height), display: true, animate: false)
+        window.orderFrontRegardless()
     }
 
     private func makeMainPanel() -> CuePanel {
@@ -237,6 +288,7 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         if sender === transcriptPanel { toggleSeparateTranscript() }
+        else if sender === panel, model?.live.isOpen == true { compact() }
         else { hide() }
         return false
     }
@@ -254,16 +306,7 @@ private struct FloatingContent: View {
     let controller: FloatingWindow
 
     var body: some View {
-        switch controller.mode {
-        case .bar:
-            bar
-        case .session:
-            SessionWorkspace(live: model.live, floating: true, overlay: model.workspace.overlay ?? OverlayPreferences(),
-                             onMain: { model.openSessionSetup() }, onCompact: { controller.compact() }, onHide: { controller.hide() },
-                             opacityController: controller, model: model)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
-                .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary).allowsHitTesting(false) }
-        case .test:
+        if controller.mode == .test {
             VStack(alignment: .leading, spacing: 9) {
                 HStack {
                     PanelDragGrip().frame(width: 19, height: 20)
@@ -278,10 +321,25 @@ private struct FloatingContent: View {
             .padding(16)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        } else if model.live.isOpen {
+            // Keep this view alive while the response window is minimized so its
+            // transcript visibility, pinned section, and scroll state survive restore.
+            SessionWorkspace(live: model.live, floating: true, overlay: model.workspace.overlay ?? OverlayPreferences(),
+                             onMain: { model.openSessionSetup() }, onCompact: { controller.compact() }, onHide: { controller.hide() },
+                             opacityController: controller, model: model)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary).allowsHitTesting(false) }
         }
     }
 
-    private var bar: some View {
+}
+
+private struct FloatingBar: View {
+    let model: AppModel
+    let controller: FloatingWindow
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    var body: some View {
         HStack(spacing: 11) {
             PanelDragGrip().frame(width: 18, height: 27)
             Image(systemName: "waveform.circle.fill")
@@ -292,44 +350,60 @@ private struct FloatingContent: View {
             if let message = model.live.completionMessage, !model.live.isOpen {
                 Text(message).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            Menu {
-                ForEach(model.activeAssistants) { assistant in
-                    Button(assistant.name) { model.selectedAssistantID = assistant.id }
-                }
-                if model.activeAssistants.isEmpty {
-                    Button("Open Assistants") {
-                        model.openSessionSetup()
-                        model.selection = .assistants
+            if model.live.isOpen {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(model.live.assistant?.name ?? "Session").font(.caption.weight(.medium)).lineLimit(1)
+                    Text(hasAudioIssue ? "Audio needs attention" : model.live.audioSourceLabel)
+                        .font(.system(size: 10)).foregroundStyle(hasAudioIssue ? Color.orange : .secondary).lineLimit(1)
+                }.frame(maxWidth: 150, alignment: .leading)
+            } else {
+                Menu {
+                    ForEach(model.activeAssistants) { assistant in
+                        Button(assistant.name) { model.selectedAssistantID = assistant.id }
                     }
+                    if model.activeAssistants.isEmpty {
+                        Button("Open Assistants") { model.openSection(.assistants) }
+                    }
+                } label: {
+                    Text(model.activeAssistants.first { $0.id == model.selectedAssistantID }?.name ?? model.activeAssistants.first?.name ?? "Choose assistant")
+                        .lineLimit(1)
                 }
-            } label: {
-                Text(model.activeAssistants.first { $0.id == model.selectedAssistantID }?.name ?? model.activeAssistants.first?.name ?? "Choose assistant")
-                    .lineLimit(1)
+                .menuStyle(.borderlessButton)
             }
-            .menuStyle(.borderlessButton)
             Spacer(minLength: 0)
             if model.live.isOpen {
+                audioSourcesMenu
                 Button("End Session", systemImage: "stop.circle.fill") { model.endSession() }.labelStyle(.iconOnly)
                     .help("End the session")
+                    .accessibilityIdentifier("barEndSession")
                     .disabled(model.live.phase == .ending)
                 if model.live.phase == .paused {
-                    Button("Resume", systemImage: "play.fill") { model.live.resume(); controller.show() }.labelStyle(.iconOnly)
+                    Button("Resume", systemImage: "play.fill") { model.live.resume(); controller.show(focus: true) }.labelStyle(.iconOnly)
                 } else {
                     Button("Pause", systemImage: "pause.fill") { model.live.pause() }.labelStyle(.iconOnly)
                         .disabled(model.live.phase != .active)
                 }
-                Button("Restore", systemImage: "arrow.up.left.and.arrow.down.right") { controller.show() }
-                    .help("Restore the live session window")
-                    .accessibilityIdentifier("restoreSession")
+                if controller.mode == .session {
+                    Button("Minimize Panels", systemImage: "arrow.down.right.and.arrow.up.left") { controller.showBar() }
+                        .labelStyle(.iconOnly).help("Keep the bar and hide the transcript and response panels")
+                        .accessibilityIdentifier("barMinimizeSession")
+                } else {
+                    Button("Restore", systemImage: "arrow.up.left.and.arrow.down.right") { controller.show(focus: true) }
+                        .labelStyle(.iconOnly).help("Restore the transcript and response panels")
+                        .accessibilityIdentifier("restoreSession")
+                        .disabled(model.live.phase == .ending)
+                }
             } else {
-                Button("Set Up Session", systemImage: "play.circle.fill") { model.openSessionSetup() }.labelStyle(.iconOnly)
+                Button("Start Session", systemImage: "play.circle.fill") { model.startQuickSession() }
+                    .labelStyle(.iconOnly).help("Start with the selected assistant and saved audio sources")
+                    .accessibilityIdentifier("quickStartSession")
+                    .disabled(model.live.pendingSave != nil)
             }
             PanelQuickSettings(controller: controller, model: model)
             Menu {
-                Button("CueLens Window") { model.openSessionSetup() }
-                Button("Floating Panel Settings") {
-                    model.openSessionSetup()
-                    model.selection = .privacy
+                Button("Open Setup") { model.openSessionSetup() }
+                if model.live.pendingSave != nil {
+                    Button("Retry Saving Previous Session") { model.live.retrySave() }
                 }
                 Button("Hide Bar") { controller.hide() }
             } label: {
@@ -342,13 +416,55 @@ private struct FloatingContent: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
             if model.live.isOpen {
-                Capsule().fill(Color(nsColor: .windowBackgroundColor))
+                Capsule().fill(Color(nsColor: .windowBackgroundColor)
+                    .opacity(reduceTransparency ? 1 : (model.workspace.overlay ?? OverlayPreferences()).liveBackgroundOpacity))
             } else {
                 Capsule().fill(.regularMaterial)
             }
         }
         .overlay { Capsule().strokeBorder(.quaternary).allowsHitTesting(false) }
         .padding(3)
+    }
+
+    private var audioSourcesMenu: some View {
+        Menu {
+            ForEach([AudioSource.microphone, .meeting]) { source in
+                let name = source == .microphone ? "Microphone" : "Meeting Audio"
+                Section("\(name) · \(audioStatus(source))") {
+                    Button(model.live.enabled.contains(source) ? "Disable \(name)" : "Enable \(name)") {
+                        model.toggleSessionAudio(source)
+                    }
+                    if let error = model.live.audioErrors[source] {
+                        Text(error).disabled(true)
+                        Button("Retry \(name)") { model.live.retry(source) }
+                            .disabled(!model.live.enabled.contains(source) || model.live.phase != .active)
+                    }
+                }
+            }
+        } label: {
+            Label("Audio Sources", systemImage: model.live.audioLive ? "waveform" : "mic.slash")
+                .labelStyle(.iconOnly)
+                .foregroundStyle(hasAudioIssue ? Color.orange : model.live.audioLive ? CueStyle.accent : .secondary)
+        }
+        .menuStyle(.borderlessButton).fixedSize()
+        .help("Choose microphone and meeting audio")
+        .accessibilityIdentifier("barAudioSources")
+        .disabled(model.live.phase == .ending)
+    }
+
+    private func audioStatus(_ source: AudioSource) -> String {
+        guard model.live.enabled.contains(source) else { return "Off" }
+        if model.live.phase == .paused { return "Paused" }
+        if model.live.audioErrors[source] != nil { return "Needs attention" }
+        if model.live.starting.contains(source) { return "Starting" }
+        if model.live.speechQueuedSources.contains(source) { return "Transcription queued" }
+        if model.live.transcribingSources.contains(source) { return "Transcribing" }
+        if model.live.activeSources.contains(source) { return "Listening" }
+        return "Enabled"
+    }
+
+    private var hasAudioIssue: Bool {
+        model.live.enabled.contains { model.live.audioErrors[$0] != nil }
     }
 }
 
@@ -381,6 +497,19 @@ struct PanelQuickSettings: View {
                         .accessibilityIdentifier("panelOpacitySlider")
                     }
                     if model.live.isOpen {
+                        Toggle("Enable screen context", isOn: Binding(
+                            get: { model.live.options.screenContext },
+                            set: { enabled in
+                                model.live.setScreenContext(enabled)
+                                var preferences = model.preferences
+                                preferences.sessionScreenContext = enabled
+                                model.savePreferences(preferences)
+                            }
+                        ))
+                        .accessibilityIdentifier("liveScreenContextToggle")
+                        .disabled(model.live.phase == .ending)
+                        Text("⌘X captures locally. Answer sends the attached image to your provider.")
+                            .font(.caption).foregroundStyle(.secondary)
                         LabeledContent("Background", value: settings.liveBackgroundOpacity.formatted(.percent.precision(.fractionLength(0))))
                         Slider(value: Binding(get: { settings.liveBackgroundOpacity }, set: { opacity in
                             controller.updateQuickSettings { $0.backgroundOpacity = opacity }
@@ -408,6 +537,9 @@ struct PanelQuickSettings: View {
                         set: { placement in controller.updateQuickSettings { $0.responsePlacement = placement } }
                     )) {
                         ForEach(ResponsePlacement.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    if let error = controller.shortcutError {
+                        Text(error).font(.caption).foregroundStyle(.orange)
                     }
                     HStack {
                         if controller.showsBarOpacity {

@@ -138,6 +138,7 @@ struct Preferences: Codable, Equatable {
     var saveRawAudio: Bool?
     var sessionMicrophone: Bool?
     var sessionMeetingAudio: Bool?
+    var sessionScreenContext: Bool?
 
     func answerSelection(for assistant: AssistantProfile) -> ProviderSelection {
         let provider = assistant.provider ?? answerProvider
@@ -207,6 +208,13 @@ struct MeetingSession: Codable, Equatable, Identifiable {
     var audioFiles: [String]?
     var practiceAttempts: [PracticeAttempt]?
     var practiceStyle: PracticeStyle?
+    var transcriptionIncompleteSources: [AudioSource]?
+
+    var transcriptionNotice: String? {
+        guard let sources = transcriptionIncompleteSources, !sources.isEmpty else { return nil }
+        let names = sources.map(\.rawValue).joined(separator: ", ")
+        return "Some buffered speech could not be transcribed before this session ended (\(names)). The saved transcript may be incomplete."
+    }
 
     var duration: TimeInterval {
         if let endedAt { return max(0, endedAt.timeIntervalSince(startedAt)) }

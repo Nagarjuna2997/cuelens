@@ -15,6 +15,8 @@ final class AppModel {
     @ObservationIgnored lazy var cameraWindow = StudioCameraWindow(model: self)
     @ObservationIgnored private var cameraSettingsSave: Task<Void, Never>?
     @ObservationIgnored private var terminationSubscription: AnyCancellable?
+    @ObservationIgnored private var terminationWaiters = [CheckedContinuation<Void, Never>]()
+    private(set) var preparingToQuit = false
     var selectedAssistantID: UUID?
     private(set) var workspace = Workspace()
     private(set) var history = [MeetingSession]()
@@ -52,9 +54,13 @@ final class AppModel {
             }
         live.onEmergency = { [weak self] in self?.camera.stop() }
         live.onEnded = { [weak self] in
-            self?.camera.stop()
-            self?.cameraWindow.hide()
-            self?.overlay.showBar()
+            guard let self else { return }
+            camera.stop()
+            cameraWindow.hide()
+            if !preparingToQuit { overlay.showBar() }
+            let waiters = terminationWaiters
+            terminationWaiters.removeAll()
+            for waiter in waiters { waiter.resume() }
         }
         resources.onConditionChange = { [weak self] condition in
             self?.camera.lowResources = condition.reducesWork
@@ -73,8 +79,32 @@ final class AppModel {
         update { $0.camera = settings }
     }
 
+    /// AppKit keeps the process alive until capture has stopped and the session
+    /// save completes. A failed save remains in memory and cancels normal Quit.
+    func prepareForTermination() async -> Bool {
+        preparingToQuit = true
+        flushCameraSettings()
+        camera.stop()
+        cameraWindow.hide()
+        if live.isOpen {
+            await withCheckedContinuation { continuation in
+                terminationWaiters.append(continuation)
+                live.end()
+            }
+        } else if live.pendingSave != nil {
+            live.retrySave()
+        }
+        guard live.pendingSave == nil else {
+            preparingToQuit = false
+            return false
+        }
+        overlay.saveOpacity()
+        overlay.hide()
+        return true
+    }
+
     func openSessionSetup() {
-        selection = .session
+        selection = .home
         if let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("main") == true })
             ?? NSApp.windows.first(where: { !($0 is NSPanel) && $0.canBecomeKey && $0.title == "CueLens" }) {
             NSApp.activate(ignoringOtherApps: true)
@@ -90,9 +120,55 @@ final class AppModel {
     }
 
     func endSession() {
+        camera.stop()
+        cameraWindow.hide()
         minimizeMainWindow()
         overlay.showBar()
         live.end()
+    }
+
+    func toggleSessionAudio(_ source: AudioSource) {
+        guard live.isOpen, live.phase != .ending, source == .microphone || source == .meeting else { return }
+        live.toggle(source)
+        guard !live.options.practice else { return }
+        var updated = preferences
+        if source == .microphone { updated.sessionMicrophone = live.enabled.contains(source) }
+        else { updated.sessionMeetingAudio = live.enabled.contains(source) }
+        if updated != preferences { savePreferences(updated) }
+    }
+
+    func quickSessionOptions(for assistant: AssistantProfile) -> SessionOptions {
+        var options = SessionOptions()
+        options.microphone = preferences.sessionMicrophone ?? true
+        options.meetingAudio = assistant.kind == .mockInterview ? false : (preferences.sessionMeetingAudio ?? true)
+        options.screenContext = preferences.sessionScreenContext ?? false
+        options.save = assistant.retainSession
+        options.practice = assistant.kind == .mockInterview
+        // Audio recording and cloud transcription need a deliberate session choice.
+        options.saveAudio = false
+        options.allowCloud = false
+        return options
+    }
+
+    func startQuickSession() {
+        if live.isOpen {
+            if live.phase != .ending { overlay.show(focus: true) }
+            return
+        }
+        guard live.pendingSave == nil else { return }
+        var assistant = activeAssistants.first { $0.id == selectedAssistantID } ?? activeAssistants.first
+        if assistant == nil {
+            let profile = AssistantProfile(name: "General conversation")
+            guard saveAssistant(profile) else { return }
+            assistant = profile
+        }
+        guard let assistant else { return }
+        selectedAssistantID = assistant.id
+        live.start(assistant: assistant, settings: preferences, options: quickSessionOptions(for: assistant))
+        guard live.isOpen else { return }
+        overlay.register()
+        minimizeMainWindow()
+        overlay.show(focus: true)
     }
 
     func openSection(_ section: NavigationSection) {

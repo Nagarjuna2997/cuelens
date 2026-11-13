@@ -12,6 +12,7 @@ struct CueLensApp: App {
             ContentView(model: model)
                 .frame(minWidth: 1040, minHeight: 680)
                 .onAppear {
+                    delegate.model = model
                     model.overlay.register()
                     let open = openWindow
                     model.openMainWindow = { open(id: "main") }
@@ -36,6 +37,22 @@ struct CueLensApp: App {
     }
 }
 
+@MainActor
 final class CueLensAppDelegate: NSObject, NSApplicationDelegate {
+    weak var model: AppModel?
+    private var terminationTask: Task<Void, Never>?
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let model else { return .terminateNow }
+        guard terminationTask == nil else { return .terminateLater }
+        terminationTask = Task { [weak self] in
+            let ready = await model.prepareForTermination()
+            if !ready { model.overlay.showBar() }
+            sender.reply(toApplicationShouldTerminate: ready)
+            self?.terminationTask = nil
+        }
+        return .terminateLater
+    }
 }

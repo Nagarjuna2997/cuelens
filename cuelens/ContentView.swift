@@ -165,7 +165,7 @@ struct AssistantsView: View {
                             if !assistant.archived {
                                 Button("Launch") {
                                     model.selectedAssistantID = assistant.id
-                                    model.selection = .session
+                                    model.selection = .home
                                 }
                             }
                             Button("Edit") { edit(assistant) }

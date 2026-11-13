@@ -1,41 +1,77 @@
-# CueLens Pro user guide
+# CueLens user guide
 
-## Set up an assistant for each role
+## Create an assistant for each role
 
-1. Open **Assistants → New Assistant**. Enter a name such as “iOS Developer Interview”. Select **Interview**, **Mock interview**, **Work meeting**, **Sales**, **Technical discussion**, or **Custom**.
-2. Select **Upload Résumé**. In the **Upload** tab, choose a PDF, DOCX, TXT, or Markdown file and click **Attach to Assistant**. Click **Review Text** to check the extraction. Scanned PDFs may require a searchable copy.
-3. Select **Attach Job Description**. Upload a file or open **Type or Paste** to paste the text. CueLens Pro uses it to understand the role. Your résumé and experience notes supply personal facts.
-4. Select **Add Material** for project notes, portfolio details, or other references. **My Documents** reuses text attached to your saved assistants. **Type or Paste** accepts a note with an optional title. The file size limit is 12 MB, with up to 20 materials per assistant.
-5. Open **Additional background and job details** for details missing from the résumé, such as your exact role in a project. Use **Configuration** to set language, tone, instructions, or an assistant-specific model.
-6. In **Response types**, choose a default such as STAR. Click **Add Response Type** to add a named instruction such as “Compare the tradeoffs and give one practical example.”
-7. Click **Save Assistant** or **Save & Launch**. The assistant list has search, launch, edit, duplicate, archive, and delete. Archiving keeps the profile in the workspace and removes it from the live assistant picker.
+1. Open **Assistants → New Assistant** or use **New Assistant** in Studio. All fields are optional. A blank name uses the job title or “Untitled Assistant”. Choose the meeting type and answer style that fit the role.
+2. Select **Upload Résumé**. The **Upload** tab accepts PDF, DOCX, TXT, and Markdown. Review the extracted text, then attach it. Scanned PDFs need searchable text. Imports are limited to 12 MB and PDF extraction to 100 pages.
+3. Use **Attach Job Description** for the role requirements. Add projects, reference notes, and supporting evidence through **Add Material**. **Type or Paste** accepts text directly. **My Documents** reuses material from existing profiles. Each assistant supports up to 20 materials.
+4. Add background, instructions, language, or an assistant-specific model under the additional configuration controls. Personal answers use résumé and experience evidence. Missing facts should produce a qualified answer or a request for more detail.
+5. Click **Save Assistant** or **Save & Launch**. The assistant list supports search, duplicate, archive, restore, and delete. Practice records remain associated with the original assistant ID.
 
-## Connect OpenAI, Claude, or Gemini
+## Connect an answer provider
 
-1. Open **Providers**. At the top, under **API connection**, choose the provider in **Configure**.
-2. Click **Get API Key** or use the provider dashboard where you manage API access. Use an API key associated with your own provider account.
-3. Copy the key. In CueLens Pro, click **Paste API Key** or press **⌘V** in the secure key field. Keep the suggested model ID unless your account needs another supported model.
-4. Click **Test Connection**. A successful test confirms that the selected model streamed text to the app. It sends a generic prompt and can use API credits.
-5. Under **Answers**, select the **Default provider** and optionally a **Backup provider**. Click **Save Settings**. Repeat the connection steps for any backup. Switch providers explicitly from the live session menu.
-6. Keep **Apple on-device** for local speech recognition when your locale supports it. Select **OpenAI Realtime** to send enabled audio sources to OpenAI after session approval.
+1. Open **Providers** and choose **OpenAI**, **Claude**, or **Gemini** under **Configure**.
+2. Use **Get API Key** to open that provider’s dashboard. Copy your key and click **Paste API Key**, or use **⌘V** in the secure field.
+3. Choose a model your account can access. Click **Test Connection** to send a short generic prompt and check streaming. This request can consume API credits.
+4. Set **Default provider**, choose a backup if needed, and click **Save Settings**. Repeat for another provider when required. Keys are saved in macOS Keychain.
+5. Keep **Apple on-device** for local speech recognition. If you select **OpenAI Realtime**, each session has a separate **Use OpenAI Realtime transcription** switch under **Session preferences**. With that switch off, the session uses Apple speech.
 
-API links are available in the app. [OpenAI API keys](https://platform.openai.com/api-keys), [Anthropic API keys](https://platform.claude.com/settings/keys), [Gemini API keys](https://aistudio.google.com/api-keys)
+Manual **Answer** sends the question, recent transcript, relevant assistant material, and any attached image to the selected provider. **Answer meeting questions automatically** enables requests when meeting questions are detected. Provider access and billing belong to your API account. The app displays token usage when supplied by the provider, with measured response timing. It does not calculate a currency estimate. [OpenAI API keys](https://platform.openai.com/api-keys), [Anthropic API keys](https://platform.claude.com/settings/keys), [Gemini API keys](https://aistudio.google.com/api-keys)
 
-## Start and use a live session
+## Camera preview
 
-1. Open your meeting in Chrome, Zoom, Teams, or another app.
-2. In **Live Session**, choose your assistant. Enable **Meeting audio from this Mac** for audio playing through your Mac and **Microphone** if you want your own spoken responses. Choose headphones to reduce sound picked up by the microphone from your speakers.
-3. Run **Test Audio Sources**. Speak or play sample audio for about eight seconds. If a source shows no signal or a permission error, use **Permissions** to open macOS settings. Camera access is requested from the Camera page when you start a preview.
-4. Review the cloud processing toggle, local transcript saving, and optional raw audio recording. Enable cloud processing for answers and cloud speech. Start with participant consent and any required permission under your meeting or assessment rules.
-5. The floating session opens over your meeting when **Use floating window over the meeting** is on. Drag the dotted grip, resize from the edges, and move it aside to see more of your meeting. Set **Quick Settings → Opacity** to your preference.
-6. Live transcript appears on the left. The center shows the answer and streams new text as it arrives. Use **What should I say next?**, **⌘↩**, or **⌃N** to answer the latest meeting question. A transcript row can also be sent on its own. The toolbar provides transcript and response-type toggles, pinned responses, shortcut help, and previous and next responses.
-7. To ask something else, type it in the full-width message field and click **Ask CueLens**. To analyze a coding problem, click the camera icon and choose **Capture a Window** or **Choose an Image**. Select only the intended material, review the preview, then click **Solve Image**.
-8. **Minimize** is the far-right button in the floating response toolbar. It leaves the compact bar available. Click **Restore** to reopen the response window. **⌘⌥H** shows or hides the panel. **⌘⌥X** pauses capture, cancels answer generation, stops the camera, and hides the panel. The two ⌘⌥ shortcuts can be changed in **Screen Sharing**.
-9. In **Quick Settings**, use **Docked** to keep the transcript next to the answer or **Floating** to move it separately. Choose where to put response types, change answer font size, or switch theme.
-10. Use the stop button on the compact bar or **Session Options → End Session** to finish. Saved sessions appear in **History**. Open a transcript row’s pencil to correct it. Use **Summarize** with a configured provider or **Actions** to copy, export, or delete the session.
+Click **Start Camera** in Studio. Allow camera access when macOS requests it. The **Me** panel shows your local processed image. Camera settings provide a supported source and format picker, center/thirds framing, crop controls, calibration, and picture effects. Use **Before and After** to compare, **Bypass** for the original camera image, and **Float Video Preview** to move and resize the preview independently. See [the camera guide](camera.md) for outgoing-video setup.
 
-## Practice, sharing, and camera
+## Start a conversation
 
-- **Practice** starts a mock interviewer with the configured provider. Type your answer or speak into the selected microphone and click **Review Spoken Answer**. Click **Next Question** to continue.
-- **Screen Sharing** can show a neutral test card. Share a window or display, check the actual viewer’s feed, and record what they saw. A display share can include both floating panels. Hide them before sharing whenever visibility is uncertain.
-- **Camera → Start Preview** opens your physical camera. Enable **Eye Contact (Experimental)**, calibrate looking into the camera, then calibrate the spot where you read. The effect has a bounded correction range and an original-feed fallback. To send video to a meeting app, use a signed build with the approved extension. See [camera setup](camera.md).
+1. In **Studio**, choose an assistant. Starting without one creates a general profile.
+2. Enable **Microphone** for your voice and **Meeting audio** for sound playing on this Mac. Other applications playing sound may be included. Source labels identify the microphone and meeting route. They do not identify each remote speaker.
+3. Open **Session preferences** to choose the microphone and run **Test Audio**. Speak or play a known sample during its eight-second check. Use the **Permissions** menu for Microphone, Screen & System Audio, and Speech Recognition settings if access is denied.
+4. Enable **Save an audio recording** if you want retained CAF audio. It starts off for each setup. **Save transcript and answers** controls text retention. Recording also enables saved session text.
+5. Enable **Enable screen context** if you want image context. Enable **Answer meeting questions automatically** if desired. Manual Answer remains available with a connected provider.
+6. Choose **Open in the compact window** to launch over another application, or use the full Studio. Click **Start Session** when participants have given any required consent and assistance is permitted.
+
+The transcript appears on the left, answers in the center, and video on the right. Resize the dividers to suit your screen. The status bar separates microphone signal, transcription provider, camera state, and answer timing. Audio capture and recording can continue after a transcription error. Read the source error and use **Retry** when ready.
+
+## Capture and answer
+
+- **⌘X** captures the full display under the pointer when screen capture is enabled. CueLens excludes its own windows from that image. This affects CueLens’s screenshot only. The image stays in memory until you send it or remove it.
+- The capture menu also offers **Capture a Window** and **Choose an Image…**. Review the preview before sending.
+- **⌘C** sends the attached image and question, sends the typed question, or answers the latest transcript question. Image requests default to explaining and solving the visible coding problem.
+- The response toolbar provides previous/next answers, pinned responses, response styles, length, retry, and explicit backup-provider selection. Expand **Details** when an answer includes a longer explanation.
+- **Cancel** stops the current request. A source or provider error explains what to retry. API credentials and model access must be configured before generating text.
+
+| Shortcut | Action during a live session |
+| --- | --- |
+| ⌘C | Answer or send |
+| ⌘X | Capture the display under the pointer |
+| ⌘⌥H | Show or hide the floating panel |
+| ⌘⌥X | Pause audio, cancel generation, stop camera, and hide the panel |
+
+The first two shortcuts replace the usual Copy and Cut shortcuts while the session is open. Use **Edit → Copy/Cut** for editing. Session completion releases them. The two ⌘⌥ shortcuts are configurable in **Screen Sharing**.
+
+## Compact window and ending
+
+Use **Minimize** in Studio to move the conversation into a floating panel. Drag its grip and resize the edges. **Minimize** reduces it to the bar, and **Restore** brings back the response panel. **Quick Settings** controls background transparency, answer text size, theme, and docked or separate transcripts. Text remains solid as the panel background changes.
+
+Click **End** in the session toolbar or the stop button on the bar. Audio and camera stop, retained session content is saved, and the compact bar reports the result. A pending save can be retried. Open History when you want to inspect the result.
+
+## Repeatable interview practice
+
+1. Open **Practice**, select the role, and choose **Behavioral**, **Technical**, **Coding discussion**, or **Project deep dive**.
+2. Choose whether hints are available and whether to use the microphone. Click **Start Practice** for a baseline question from the selected API.
+3. Type your answer and submit it, or speak and click **Review Spoken Answer**. Feedback covers correctness, relevance, structure, and clarity, then gives an example grounded in the supplied facts.
+4. Click **Try Again** to answer the same question, **Hint** when enabled, or **Next Question** for an adaptive follow-up.
+5. Use **Review Tomorrow** to schedule the latest topic. End the session with saving enabled. **Practice** shows role-specific attempts, due reviews, and feedback. **Practice This Topic** starts a typed review session.
+
+Words, filler phrases, and repetition are estimated from transcript text. Pace and long pauses require usable speech timestamps. Recognition may omit fillers. These measurements are separate from camera posture cues. Saved progress adapts practice requests without training model weights or uploading camera recordings.
+
+## History, export, and deletion
+
+Open **History** to select a session. Search or correct transcript text, expand prior responses, and use **Summarize** to send a bounded transcript excerpt to the chosen provider. Summarization asks for confirmation. Saved audio has playback controls and **Show in Finder**.
+
+The **Actions** menu copies text, exports TXT or Markdown, and deletes a session after confirmation. Exports include available practice feedback and delivery metrics. Deletion removes that session’s text and audio. A damaged record is reported while other readable sessions remain accessible. File locations and handling are described in [architecture](architecture.md).
+
+## Screen sharing
+
+Use **Screen Sharing** to record an actual viewer-side test for the meeting app and sharing mode. Sharing an entire display can expose CueLens. Tab, window, and display sharing need separate checks. Capture and recording indicators remain visible in CueLens. See the [compatibility checklist](validation.md) for tested and unverified combinations.

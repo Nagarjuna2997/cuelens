@@ -34,12 +34,14 @@ struct CaptureImage: Sendable {
 }
 
 enum ScreenImageError: LocalizedError {
-    case unreadable, pickerFailed
+    case unreadable, pickerFailed, displayUnavailable, permissionRequired
 
     var errorDescription: String? {
         switch self {
         case .unreadable: "CueLens couldn’t read this image. Try a smaller PNG or JPEG."
         case .pickerFailed: "The window picker couldn’t capture an image. Check Screen & System Audio Recording in System Settings or choose an image file."
+        case .displayUnavailable: "This display is unavailable. Move the pointer to the display you want to capture and retry."
+        case .permissionRequired: "Allow CueLens in System Settings → Privacy & Security → Screen & System Audio Recording, then retry Capture."
         }
     }
 }
@@ -48,10 +50,13 @@ enum ScreenImageError: LocalizedError {
 final class WindowCapture: NSObject, SCContentSharingPickerObserver {
     private let picker = SCContentSharingPicker.shared
     private var completion: ((Result<CaptureImage?, Error>) -> Void)?
+    private var requestID: UUID?
+    private var screenshotWork: Task<Void, Never>?
 
     func chooseWindow(completion: @escaping (Result<CaptureImage?, Error>) -> Void) {
         cancel()
         self.completion = completion
+        requestID = UUID()
         var configuration = SCContentSharingPickerConfiguration()
         configuration.allowedPickerModes = [.singleWindow]
         if let identifier = Bundle.main.bundleIdentifier { configuration.excludedBundleIDs = [identifier] }
@@ -63,12 +68,51 @@ final class WindowCapture: NSObject, SCContentSharingPickerObserver {
     }
 
     func cancel() {
+        screenshotWork?.cancel()
+        screenshotWork = nil
         finish(.success(nil))
+    }
+
+    func captureDisplay() async throws -> CaptureImage {
+        let screen = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+        guard let displayID = (screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else {
+            throw ScreenImageError.displayUnavailable
+        }
+        let content: SCShareableContent
+        do {
+            content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        } catch {
+            try Task.checkCancellation()
+            throw ScreenImageError.permissionRequired
+        }
+        try Task.checkCancellation()
+        guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
+            throw ScreenImageError.displayUnavailable
+        }
+        // This filter affects CueLens's own screenshot only.
+        let ownApplication = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+        let filter = SCContentFilter(display: display, excludingApplications: ownApplication, exceptingWindows: [])
+        return try await Self.image(from: filter)
+    }
+
+    private static func image(from filter: SCContentFilter) async throws -> CaptureImage {
+        let size = filter.contentRect.size
+        guard size.width > 0, size.height > 0 else { throw ScreenImageError.pickerFailed }
+        let configuration = SCStreamConfiguration()
+        let scale = min(CGFloat(filter.pointPixelScale), CGFloat(CaptureImage.maximumDimension) / max(size.width, size.height))
+        configuration.width = max(2, Int(size.width * scale))
+        configuration.height = max(2, Int(size.height * scale))
+        configuration.showsCursor = false
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        try Task.checkCancellation()
+        return try CaptureImage.encode(image)
     }
 
     private func finish(_ result: Result<CaptureImage?, Error>) {
         guard let completion else { return }
         self.completion = nil
+        requestID = nil
+        screenshotWork = nil
         picker.remove(self)
         picker.isActive = false
         completion(result)
@@ -84,22 +128,17 @@ final class WindowCapture: NSObject, SCContentSharingPickerObserver {
 
     nonisolated func contentSharingPicker(_ picker: SCContentSharingPicker, didUpdateWith filter: SCContentFilter, for stream: SCStream?) {
         Task { @MainActor in
-            guard self.completion != nil else { return }
-            let configuration = SCStreamConfiguration()
-            let size = filter.contentRect.size
-            guard size.width > 0, size.height > 0 else {
-                self.finish(.failure(ScreenImageError.pickerFailed))
-                return
-            }
-            let scale = min(CGFloat(filter.pointPixelScale), CGFloat(CaptureImage.maximumDimension) / max(size.width, size.height))
-            configuration.width = max(2, Int(size.width * scale))
-            configuration.height = max(2, Int(size.height * scale))
-            configuration.showsCursor = false
-            do {
-                let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
-                self.finish(.success(try CaptureImage.encode(image)))
-            } catch {
-                self.finish(.failure(ScreenImageError.pickerFailed))
+            guard let requestID = self.requestID else { return }
+            self.screenshotWork?.cancel()
+            self.screenshotWork = Task { @MainActor in
+                do {
+                    let image = try await Self.image(from: filter)
+                    guard self.requestID == requestID else { return }
+                    self.finish(.success(image))
+                } catch {
+                    guard !Task.isCancelled, self.requestID == requestID else { return }
+                    self.finish(.failure(ScreenImageError.pickerFailed))
+                }
             }
         }
     }

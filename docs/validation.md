@@ -1,45 +1,50 @@
-# Validation and roadmap
+# Validation
 
-## Automated checks
+This page separates automated checks from observed device behavior. The development machine is a 10-core Apple M4 MacBook Air with 16 GB memory, macOS 27.0.1 (26A434), and Xcode 27.2 (27B52). Observations below are from November 13, 2026.
 
-Test hardware was a 10-core Apple M4 MacBook Air with 16 GB of memory, macOS 27.0.1 (26A434), and Xcode 27.2 (27B52).
+## Automated evidence
 
-- The macOS unit suite passed for assistant and session storage, DOCX extraction and scoped retrieval, provider request shapes and SSE, transcript timestamps and corrections, export and audio deletion, cloud consent, request cancellation, voice activity, resource pressure, and pixel-level camera correction and calibration fallback.
-- The universal app and optional extension compile for arm64 and x86_64. Only arm64 was run.
-- The Xcode UI test runner timed out enabling automation mode on this Mac. Separate desktop checks verified launching, creating an assistant, starting a session with capture off, saving it, opening History, and opening the compact floating bar. The Mac locked during CueLens Pro’s final visual checks.
-- During an earlier signed build’s system-audio test, macOS showed the system-audio permission path. The test did not establish playback-to-transcript performance. No production API keys or personal assistant material were used for automated checks.
+The release candidate passed **57 unit tests**, with zero failures, skips, or runtime warnings, in `build/ReleaseCandidateTests.xcresult`. Coverage includes storage, scoped material retrieval, provider request/stream parsing, transcript behavior, recording lifecycle, cancellation, practice recovery, image metadata removal, camera settings, bounded frame delivery, and framing/effect safeguards. These tests include a real generated CAF file opened by AVAudioFile and AVAudioPlayer. Synthetic camera tests do not establish face tracking quality in real video.
 
-## Real-device checklist
+The signed universal app was packaged for local testing with Apple Development signing; signature verification passed. The optional 720p30 virtual-camera extension also compiled and embedded successfully for arm64 and x86_64 (`build/final-camera-check.log`). Activation is blocked by Xcode's “No Accounts” and missing Mac App Development provisioning profiles for `org.cuelens.mac` in the attempted signed extension build. A compilation or development-signature check is not notarization or receiver-side compatibility.
 
-| Area | Development Mac | Next verification |
+To run the unit target from the repository:
+
+```sh
+xcodebuild -project cuelens.xcodeproj -scheme cuelens \
+  -destination 'platform=macOS,arch=arm64' \
+  -only-testing:cuelensTests test
+```
+
+## Observed on this Mac
+
+| Area | Observed result | Limit or remaining check |
 | --- | --- | --- |
-| Native app | Development-signed app launched locally | Install a notarized build on another Mac |
-| Assistant and History | Created a sample assistant, saved a session, and reopened its History entry | Recheck every revised material tab and import on both appearances |
-| Overlay | Compact panel and its route to session setup observed | Drag and resize across displays. Verify Minimize and Restore, opacity, and global shortcuts with a meeting app active |
-| Audio | Separate sources compiled and system-audio permission requested | Play known speech. Verify system audio, microphone, source labels, Bluetooth reconnect, pause and wake |
-| Cloud | Request formats, streaming events, and cancellation tested with fixtures | With a provider’s own key, test generic connection, streamed answer, image, summary, and optional Realtime transcription |
-| Chrome / Google Meet | Viewer-side screen sharing unverified | Compare tab, window, and display on a second device |
-| Zoom and Teams | Unverified | Test capture, share modes, and virtual camera after approval |
-| Camera | Correction and fallback tested on synthetic frames | Verify live camera permission, frame rate, calibration quality, and physical camera disconnection |
-| Virtual camera | Universal extension compiled and embedded | Provision, approve, and verify the feed in meeting apps |
-| Other macOS versions / Intel | Deployment target and universal compilation checked | Run on macOS 14.2 and the oldest intended Intel Mac |
+| Camera preview | Physical camera produced frames; one sample showed 30 fps, about 6 ms processing, and zero dropped frames | No face was present in that sample. Human tracking, posture calibration, long-run thermals, and framing quality remain unverified |
+| Meeting-audio transcription | A known 4.55-second audio phrase played through `afplay` was transcribed correctly, including “lavender telescope”; the source showed recording active | Verify microphone independently, simultaneous sources, Bluetooth changes, and long sessions |
+| Saved audio | The retained test session exposed `meeting-1.caf`; Play entered playback and Pause stopped it after the audio-path fix | Long recordings, seeking, and output-device changes remain unverified |
+| Ending a session | End saved the session to History and left only the compact bar visible | Recheck after capture errors, pending saves, and device disconnects |
+| Full-display screenshot | Capture reached a macOS Screen Recording approval requirement | User approved enabling access, but macOS still required physical Touch ID/password authentication. Access remains off; system-audio-only access is already on |
+| Keyboard shortcuts | In-app ⌘C sent a typed test question; ⌘X reached the screen-permission error | Real global keyboard behavior from other apps and Copy/Cut restoration should be checked independently |
+| Provider answers | Existing Keychain OpenAI connection streamed successfully. A synthetic backoff/jitter question on `gpt-5.4-mini` produced first text in 1.54 s, completed in 2.39 s, with 68 output tokens | This is one observed request, not a latency guarantee. Claude/Gemini account checks, image answers, summaries, and Realtime remain separate checks |
+| Virtual camera | Universal host and embedded 1280 × 720/30 extension compiled successfully | Provision the extension, activate, and view from a separate meeting client |
+| Screen sharing | No receiver-side invisibility result is established | Test each tab/window/display mode from a second device in the actual meeting app |
+| Distribution | Local development packaging is available | Public Developer ID signing, notarization, clean-machine install, Intel execution, and macOS 14.2 execution remain unverified |
 
-## Measure performance
+Earlier builds had desktop checks and a UI automation timeout. Those do not count as acceptance of the redesigned 0.3.0 interface. Additional results should identify the exact build, device, action, and observed outcome.
 
-Use a quiet two-minute meeting with a repeatable set of questions. In **Session Setup**, select the audio routes you want to compare and keep the provider and model constant.
+## Remaining acceptance checks
 
-1. Run once with a warm provider connection, then again after launching the app.
-2. For each answer, record **First text**, **Total**, and **Speech** from the live response area. First text includes the transcription turn delay when an automatic answer starts from a finalized meeting question.
-3. Record process CPU and memory from **Overview** or Activity Monitor. If the camera is enabled, record the displayed preview frame rate.
-4. Repeat for Low, Balanced, and Performance. Run a separate check with the virtual camera on after it is approved.
-5. Use a second client to observe any share exclusion. Record the macOS build, meeting app version, mode, and actual visibility in **Screen Sharing**.
+1. Start/stop the physical camera, compare before/after, calibrate a real seated subject, exercise framing and background controls, disable individual posture cues, and verify all effects bypass together. Check camera unplug/reconnect.
+2. Play a known phrase with each source separately, then both. Confirm transcript labels, recording state, pause/resume, saved playback, and no capture after End. Confirm audio and speech failures remain independently visible.
+3. Use a generic question and an authorized API key for each provider. Confirm first text, complete response, cancellation, a failed request, an image, and saved-session summarization. Test automatic answers only after explicit opt-in.
+4. Grant screen permission, capture a non-sensitive display/window, preview/remove/send, and exercise ⌘X/⌘C. End the session and confirm Copy/Cut work normally again.
+5. Create an empty assistant and one with material. Practice, save an answer, switch assistants, restart, and verify progress and review dates stay with the correct assistant.
+6. Test compact/minimize/restore, drag and resize across displays, background transparency, and ending without reopening the main app. Inspect light/dark appearance and larger text.
+7. Activate the signed camera extension, select it in the target meeting app, and verify video on another client. Test each screen-share mode separately and record actual visibility.
 
-The installed build displayed about 23 MB of physical memory at initial Overview launch on this Mac. This is an idle sample. Live end-to-end latency, frame rate, and performance during a real call are unmeasured.
+## Performance measurements
 
-## Remaining work
+Use the same two-minute audio sample and provider/model for repeated runs. Record the app's first-text and total-response timings, CPU/memory in Activity Monitor, and camera FPS/processing/drops. Compare cold and warm starts and each performance preset; record virtual-camera output separately after activation. A brief 30 fps camera sample is not an end-to-end latency benchmark. No live-call latency guarantee is made.
 
-- Verify live meeting audio, all live providers, and window capture with real fixtures and authorized API accounts.
-- Test Intel and older supported macOS builds on physical Macs.
-- Sign and notarize a public release and activate the optional camera extension.
-- Validate better gaze redirection with licensed model weights and real video.
-- Direct provider account sign-in is deferred. Upcoming-calendar integration and PDF export are outside the current build.
+Eye-contact redirection, a virtual microphone, direct provider-account session login, and public notarization are not completed features. The active camera tools provide local framing, posture cues, and effects; answers use configured cloud APIs.

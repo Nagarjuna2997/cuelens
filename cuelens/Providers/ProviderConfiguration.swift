@@ -101,6 +101,11 @@ struct ProviderConnection {
             body = ["model": model, "system": prompt.instructions,
                     "messages": [["role": "user", "content": prompt.input]], "max_tokens": prompt.outputLimit,
                     "stream": true]
+            if model == "claude-haiku-5-5" {
+                // Short live outlines must reserve their token budget for visible text.
+                body["thinking"] = ["type": "disabled"]
+                body["output_config"] = ["effort": "low"]
+            }
             if let screenshot {
                 let content: [[String: Any]] = [
                     ["type": "text", "text": prompt.input],

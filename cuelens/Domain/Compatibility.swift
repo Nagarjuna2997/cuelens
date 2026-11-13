@@ -16,6 +16,9 @@ struct OverlayPreferences: Codable, Equatable {
     var theme: PanelTheme?
     var transcriptLayout: TranscriptLayout?
     var responsePlacement: ResponsePlacement?
+    var backgroundOpacity: Double?
+
+    var liveBackgroundOpacity: Double { Self.clampedOpacity(backgroundOpacity ?? 0.82) }
 }
 
 enum PanelTheme: String, Codable, CaseIterable, Identifiable {

@@ -1,10 +1,12 @@
-# CueLens Pro
+# CueLens
 
-CueLens Pro is a native Mac app for meeting notes, interview practice, and live assistance. Each assistant has its own résumé, job description, materials, and response types. The floating session displays the live transcript beside streamed answers from OpenAI, Claude, or Gemini.
+CueLens is a native macOS camera studio, conversation assistant, and interview practice app. The Studio combines a live transcript, streamed answers, and a large camera preview. Each role keeps its own résumé, documents, and practice history.
 
-## Install
+The 0.3.0 rebuild adds local automatic framing, desk calibration, posture cues, background effects, a movable video preview, and an adaptive practice loop. The existing app icon is retained. Eye-contact correction is marked unavailable while a suitably licensed model and its output quality remain unvalidated.
 
-On the development Mac, open **CueLens Pro** from your user Applications folder. To build from source, open `cuelens.xcodeproj` in Xcode 27.2 and run the `cuelens` scheme.
+## Build and run
+
+Open `cuelens.xcodeproj` in Xcode 27.2, select the `cuelens` scheme, and run on your Mac. The deployment target is macOS 14.2. Packaging uses the existing project and bundle identifier `org.cuelens.mac`.
 
 ```sh
 git clone https://github.com/Nagarjuna2997/cuelens.git
@@ -12,24 +14,31 @@ cd cuelens
 scripts/package.sh
 ```
 
-The script writes a universal app and ZIP to `build/distribution/0.2.0`. This is a local development build. See [distribution and camera signing](docs/distribution.md) for Developer ID, notarization, and the optional camera extension. The app targets macOS 14.2 or later. Hardware validation so far used an Apple M4 MacBook Air running macOS 27.0.1.
+The script produces `build/distribution/0.3.0/CueLens.app` and `CueLens-0.3.0-macOS.zip`. It builds Apple Silicon and Intel slices and uses ad hoc signing unless an identity is supplied. See [distribution and signing](docs/distribution.md) for the development-signing and public-release workflows.
 
-## Quick start
+## Start using CueLens
 
-1. In **Assistants → New Assistant**, name the role and use **Upload Résumé**, **Attach Job Description**, and **Add Material**. Review extracted text. Use **Save & Launch** to open the session setup.
-2. In **Providers → API connection**, choose OpenAI, Claude, or Gemini. Copy the provider’s API key and click **Paste API Key**. Click **Test Connection**, choose the **Default provider**, and **Save Settings**. Keys are saved in macOS Keychain. Direct account sign-in is deferred.
-3. In **Live Session**, select your assistant, enable **Meeting audio from this Mac**, and optionally enable **Microphone** for your own voice. Run **Test Audio Sources** and review cloud and retention choices before starting.
-4. Switch to your meeting app. Drag the floating panel by its grip. Use **Minimize** at the far right of the response toolbar, then **Restore** on the compact bar. **Quick Settings** controls opacity, theme, text size, and transcript layout.
-5. Use **⌘↩**, **⌃N**, or **What should I say next?** for the latest question. Type a question or use the camera icon to select a coding window or image. Review the image before sending it.
-6. End the session from the compact bar or the session menu. Use **History** for transcript corrections, summaries, and exports.
+1. Open **Studio** and click **Start Camera** to preview yourself. Use **Camera** for camera selection, format, framing, calibration, and effects.
+2. Create an assistant for your role. Add a résumé, job description, and project notes as needed. All profile fields are optional.
+3. Open **Providers**, choose OpenAI, Claude, or Gemini, use **Paste API Key**, then **Test Connection** and **Save Settings**. Keys are stored in macOS Keychain.
+4. Select your microphone and meeting audio in Studio. Enable audio recording, screen capture, and automatic answers only when wanted. Click **Start Session**.
+5. Use **⌘X** to preview the display under the pointer and **⌘C** to send the attached image, typed question, or latest transcript question. These shortcuts replace Copy and Cut during the live session. The Edit menu remains available.
+6. Click **End** to stop the session and return to the floating bar. Open **History** to review saved text, play retained audio, generate a summary, export, or delete a session.
 
-Read the [full user guide](docs/guide.md) for the exact clicks and permission settings. Use CueLens Pro with any required participant consent and follow the meeting or assessment rules.
+Start **Practice** for behavioral, technical, coding-discussion, or project questions. Review an answer, retry the same question, request a hint, and schedule a topic for later review. Camera and posture observations stay local. Manual answers use the selected API with the context described in setup.
 
-## Project links
+## Current validation
 
-- [Architecture and security](docs/architecture.md)
-- [Test results and real-device matrix](docs/validation.md)
-- [Eye contact and virtual camera](docs/camera.md)
-- [Distribution and signing](docs/distribution.md)
+The 0.3.0 release candidate passed 57 unit tests on an M4 MacBook Air. Camera preview, system-audio transcription, retained audio playback, End-to-bar behavior, and an OpenAI streamed answer were checked on this Mac. Measurements and remaining checks are recorded in [validation](docs/validation.md). Virtual-camera output requires the separately signed and activated extension. Meeting-app compatibility, full-screen sharing behavior, and live API performance must be established for each tested configuration.
+
+## Documentation
+
+- [User guide and shortcuts](docs/guide.md)
+- [Camera studio, framing, and virtual output](docs/camera.md)
+- [Audio capture and routing](docs/audio.md)
+- [Architecture and data handling](docs/architecture.md)
+- [Dependencies, models, and licenses](docs/dependencies.md)
+- [Build, signing, and distribution](docs/distribution.md)
+- [Tests and compatibility checklist](docs/validation.md)
 - [Contributing](CONTRIBUTING.md)
 - [MIT license](LICENSE)

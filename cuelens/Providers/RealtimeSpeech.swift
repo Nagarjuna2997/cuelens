@@ -44,6 +44,12 @@ final class RealtimeSpeech: SpeechSink {
                         }
                     }
                     group.addTask {
+                        while !Task.isCancelled {
+                            try await Task.sleep(for: .seconds(5))
+                            try await state.checkTimeout(at: Date())
+                        }
+                    }
+                    group.addTask {
                         let language = Locale(identifier: locale).language.languageCode?.identifier
                         var transcription: [String: Any] = ["model": "gpt-live-transcribe", "delay": "minimal"]
                         if let language { transcription["languages"] = [language] }
@@ -161,6 +167,13 @@ private actor RealtimeSpeechState {
     func expect(start: Date, end: Date) {
         if expected.count == 12 { expected.removeFirst() }
         expected.append(Turn(start: start, end: max(start, end)))
+    }
+
+    func checkTimeout(at now: Date) throws {
+        let pending = expected + Array(turns.values)
+        if pending.contains(where: { now.timeIntervalSince($0.end) > 30 }) {
+            throw AudioFailure.cloudStream
+        }
     }
 
     func receive(_ data: Data) throws {

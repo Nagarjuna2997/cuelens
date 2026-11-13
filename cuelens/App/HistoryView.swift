@@ -1,4 +1,6 @@
 import AppKit
+import AVFoundation
+import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -6,6 +8,7 @@ struct HistoryView: View {
     let model: AppModel
     @State private var query = ""
     @State private var selected: UUID?
+    @State private var unreadableCount = 0
 
     private var visibleSessions: [MeetingSession] {
         let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -19,6 +22,18 @@ struct HistoryView: View {
     }
 
     var body: some View {
+        VStack(spacing: 0) {
+            if unreadableCount > 0 {
+                Label("\(unreadableCount) saved session file(s) could not be read. The files are preserved for recovery.",
+                      systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.secondary).padding(10)
+            }
+            history
+        }
+        .task { unreadableCount = (try? model.vault.readHistory().unreadableCount) ?? 0 }
+    }
+
+    @ViewBuilder private var history: some View {
         if model.history.isEmpty {
             ContentUnavailableView("No saved sessions", systemImage: "clock.arrow.circlepath",
                                    description: Text("Saved transcripts and summaries appear here when a session ends."))
@@ -69,12 +84,16 @@ private struct SessionDetails: View {
     @State private var confirmingSummary = false
     @State private var provider = AnswerProvider.disabled
     @State private var summaryWork: Task<Void, Never>?
+    @State private var summaryID: UUID?
     @State private var summaryDraft = ""
     @State private var status = ""
     @State private var export: ExportDocument?
     @State private var exportName = ""
     @State private var exportType = UTType.plainText
     @State private var exporting = false
+    @State private var savedAudio = [URL]()
+    @State private var audioLoadError: String?
+    @State private var audioPlayer = SavedSessionAudioPlayer()
 
     private var session: MeetingSession {
         model.history.first(where: { $0.id == original.id }) ?? original
@@ -113,10 +132,24 @@ private struct SessionDetails: View {
                         if session.sentAudioToCloud || session.sentTextToCloud {
                             Label("This session used cloud processing.", systemImage: "cloud").font(.caption).foregroundStyle(.secondary)
                         }
-                        if let files = session.audioFiles, !files.isEmpty {
-                            Button("Show Saved Audio in Finder") {
-                                NSWorkspace.shared.open(model.vault.audioDirectory(session.id))
+                        if let audioLoadError {
+                            Label(audioLoadError, systemImage: "waveform.badge.exclamationmark")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        if !savedAudio.isEmpty {
+                            Text("Saved audio").font(.headline)
+                            ForEach(savedAudio, id: \.self) { file in
+                                HStack {
+                                    Button(audioPlayer.playingFile == file ? "Pause" : "Play",
+                                           systemImage: audioPlayer.playingFile == file ? "pause.fill" : "play.fill") {
+                                        audioPlayer.toggle(file)
+                                    }
+                                    Text(file.lastPathComponent).font(.callout).lineLimit(1)
+                                    Spacer()
+                                    Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([file]) }
+                                }
                             }
+                            if let error = audioPlayer.error { Text(error).font(.caption).foregroundStyle(.secondary) }
                         }
                     }
                     Text("Transcript").font(.headline)
@@ -155,7 +188,17 @@ private struct SessionDetails: View {
             let assistant = model.assistants.first { $0.id == session.assistantID }
             provider = assistant.map { model.preferences.answerSelection(for: $0).provider } ?? model.preferences.answerProvider
         }
-        .onDisappear { summaryWork?.cancel() }
+        .task(id: session.audioFiles) {
+            do {
+                savedAudio = try model.vault.audioFiles(for: session.id)
+                audioLoadError = savedAudio.isEmpty && !(session.audioFiles ?? []).isEmpty
+                    ? "The saved recording is missing from this session’s Audio folder." : nil
+            } catch {
+                savedAudio = []
+                audioLoadError = "Saved audio could not be opened. Check the session’s Audio folder."
+            }
+        }
+        .onDisappear { cancelSummary(); audioPlayer.stop() }
         .sheet(item: $editing) { line in
             TranscriptEditor(line: line) { updated in
                 var record = session
@@ -166,7 +209,7 @@ private struct SessionDetails: View {
             } cancel: { editing = nil }
         }
         .alert("Delete this session?", isPresented: $confirmingDelete) {
-            Button("Delete", role: .destructive) { model.deleteSession(session.id) }
+            Button("Delete", role: .destructive) { audioPlayer.stop(); model.deleteSession(session.id) }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("The saved transcript, suggestions, summary, and raw audio for this session will be removed.")
@@ -199,7 +242,7 @@ private struct SessionDetails: View {
                         .disabled(provider == .disabled || session.transcript.isEmpty)
                 } else {
                     ProgressView().controlSize(.small)
-                    Button("Cancel") { summaryWork?.cancel() }
+                    Button("Cancel") { cancelSummary() }
                 }
             }
             if !status.isEmpty { Text(status).foregroundStyle(.secondary).font(.callout) }
@@ -214,6 +257,9 @@ private struct SessionDetails: View {
     }
 
     private func generateSummary() {
+        guard summaryWork == nil else { return }
+        let requestID = UUID()
+        summaryID = requestID
         let original = session
         let selectedProvider = provider
         let preferences = model.preferences
@@ -224,7 +270,7 @@ private struct SessionDetails: View {
         status = ""
         summaryDraft = ""
         summaryWork = Task {
-            defer { summaryWork = nil }
+            defer { if summaryID == requestID { summaryWork = nil; summaryID = nil } }
             do {
                 let connection = try ProviderConnection(selection: selection, credentials: model.credentials)
                 var flagged = original
@@ -234,17 +280,32 @@ private struct SessionDetails: View {
                                                 assistant: assistant, index: KnowledgeIndex(assistant: .init()),
                                                 recent: original.transcript, length: .detailed, preset: preferences.resourcePreset)
                 try await HTTPAnswerStream().stream(prompt, connection: connection) { event in
-                    if case .text(let token) = event { await MainActor.run { summaryDraft += token } }
+                    if case .text(let token) = event {
+                        await MainActor.run {
+                            if summaryID == requestID { summaryDraft += token }
+                        }
+                    }
                 }
                 try Task.checkCancellation()
-                flagged.summary = summaryDraft
-                flagged.summaryProvider = selectedProvider
-                if model.saveSession(flagged) { summaryDraft = "" }
+                guard summaryID == requestID,
+                      var latest = model.history.first(where: { $0.id == original.id }) else { return }
+                latest.summary = summaryDraft
+                latest.summaryProvider = selectedProvider
+                latest.sentTextToCloud = true
+                if model.saveSession(latest) { summaryDraft = "" }
             } catch {
+                guard summaryID == requestID else { return }
                 summaryDraft = ""
                 if !Task.isCancelled { status = error.localizedDescription }
             }
         }
+    }
+
+    private func cancelSummary() {
+        summaryID = nil
+        summaryWork?.cancel()
+        summaryWork = nil
+        summaryDraft = ""
     }
 
     private func copy(_ text: String) {
@@ -258,6 +319,53 @@ private struct SessionDetails: View {
         exportName = session.title.replacingOccurrences(of: "/", with: "-") + "." + format.fileExtension
         export = ExportDocument(text: text)
         exporting = true
+    }
+}
+
+@MainActor
+@Observable
+private final class SavedSessionAudioPlayer: NSObject, AVAudioPlayerDelegate {
+    private(set) var playingFile: URL?
+    private(set) var error: String?
+    @ObservationIgnored private var player: AVAudioPlayer?
+    @ObservationIgnored private var loadedFile: URL?
+
+    func toggle(_ file: URL) {
+        error = nil
+        if playingFile == file {
+            player?.pause()
+            playingFile = nil
+            return
+        }
+        do {
+            if loadedFile != file {
+                stop()
+                player = try AVAudioPlayer(contentsOf: file)
+                player?.delegate = self
+                loadedFile = file
+            }
+            guard player?.play() == true else { throw CocoaError(.fileReadCorruptFile) }
+            playingFile = file
+        } catch {
+            stop()
+            self.error = "This audio clip could not be played. Use Show in Finder to inspect the recording."
+        }
+    }
+
+    func stop() {
+        player?.stop()
+        player = nil
+        loadedFile = nil
+        playingFile = nil
+    }
+
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        let identity = ObjectIdentifier(player)
+        Task { @MainActor [weak self] in
+            guard let self, let current = self.player, ObjectIdentifier(current) == identity else { return }
+            stop()
+            if !flag { error = "Audio playback ended before the clip completed." }
+        }
     }
 }
 

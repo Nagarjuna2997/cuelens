@@ -6,20 +6,34 @@ struct ContentView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(selection: $model.selection) {
-                Section {
-                    ForEach(NavigationSection.allCases) { section in
-                        Label(section.rawValue, systemImage: section.icon).tag(section)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 9) {
+                    Image(nsImage: NSImage(named: NSImage.applicationIconName) ?? NSImage())
+                        .resizable().frame(width: 32, height: 32)
+                    Text("CueLens").font(.system(size: 20, weight: .semibold, design: .rounded))
+                }.padding(.horizontal, 17).padding(.top, 26).padding(.bottom, 28)
+                List(selection: $model.selection) {
+                    Section("Workspace") {
+                        ForEach([NavigationSection.home, .practice, .history]) { section in
+                            Label(section.rawValue, systemImage: section.icon).tag(section).padding(.vertical, 4)
+                        }
                     }
-                } header: {
-                    Label("CueLens Pro", systemImage: "waveform.circle.fill")
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                        .padding(.vertical, 10)
-                }
+                    Section("Setup") {
+                        ForEach([NavigationSection.assistants, .camera, .providers, .privacy]) { section in
+                            Label(section.rawValue, systemImage: section.icon).tag(section).padding(.vertical, 4)
+                        }
+                    }
+                }.listStyle(.sidebar).scrollContentBackground(.hidden)
+                VStack(alignment: .leading, spacing: 7) {
+                    if model.live.isOpen {
+                        Label(model.live.audioSourceLabel, systemImage: "waveform").foregroundStyle(CueStyle.accent)
+                    } else { Label("Ready when you are", systemImage: "circle") }
+                    Button("Floating Bar", systemImage: "macwindow") { model.overlay.showBar() }
+                        .buttonStyle(.borderless)
+                }.font(.caption).foregroundStyle(.secondary).padding(18)
             }
-            .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 172, ideal: 196)
+            .background(CueStyle.sidebar)
+            .navigationSplitViewColumnWidth(min: 150, ideal: 172, max: 220)
         } detail: {
             VStack(spacing: 0) {
                 if model.camera.publishing {
@@ -33,15 +47,13 @@ struct ContentView: View {
                 }
                 switch model.selection ?? .home {
                 case .home:
-                    OverviewView(model: model) { editing = AssistantProfile() }
+                    StudioView(model: model)
                 case .assistants:
                     AssistantsView(model: model) { editing = $0 }
                 case .session:
-                    if model.live.isOpen {
-                        SessionWorkspace(live: model.live, floating: false, overlay: model.workspace.overlay ?? OverlayPreferences())
-                    } else {
-                        SessionSetupView(model: model)
-                    }
+                    StudioView(model: model)
+                case .practice:
+                    PracticeView(model: model)
                 case .history:
                     HistoryView(model: model)
                 case .providers:
@@ -53,11 +65,13 @@ struct ContentView: View {
                 }
             }
         }
+        .background(CueStyle.canvas)
         .tint(CueStyle.accent)
+        .preferredColorScheme(.dark)
         .sheet(item: $editing) { profile in
             AssistantEditor(profile: profile, model: model)
         }
-        .alert("CueLens Pro", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
+        .alert("CueLens", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
             Button("OK", role: .cancel) { model.error = nil }
         } message: {
             Text(model.error ?? "")
@@ -66,7 +80,10 @@ struct ContentView: View {
 }
 
 enum CueStyle {
-    static let accent = Color.accentColor
+    static let accent = Color(red: 0.38, green: 0.82, blue: 0.74)
+    static let canvas = Color(red: 0.075, green: 0.086, blue: 0.10)
+    static let surface = Color(red: 0.105, green: 0.12, blue: 0.135)
+    static let sidebar = Color(red: 0.065, green: 0.075, blue: 0.087)
 }
 
 struct PageHeader: View {
@@ -76,7 +93,7 @@ struct PageHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             Text(title)
-                .font(.system(size: 31, weight: .semibold))
+                .font(.system(size: 25, weight: .semibold, design: .rounded))
                 .accessibilityAddTraits(.isHeader)
             Text(subtitle).foregroundStyle(.secondary)
         }
@@ -93,102 +110,13 @@ struct CueCard<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 RoundedRectangle(cornerRadius: 12)
-                    .fill(.quaternary.opacity(0.32))
+                    .fill(CueStyle.surface)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 12)
-                    .strokeBorder(.quaternary, lineWidth: 1)
+                    .strokeBorder(.white.opacity(0.07), lineWidth: 1)
                     .allowsHitTesting(false)
             }
-    }
-}
-
-struct OverviewView: View {
-    let model: AppModel
-    let create: () -> Void
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                PageHeader(title: "Overview", subtitle: "Prepare an assistant and start a session when your meeting begins.")
-                CueCard {
-                    Label(model.activeAssistants.isEmpty ? "Create your first assistant" : "Start a session",
-                          systemImage: "waveform.circle.fill")
-                        .font(.title2.weight(.semibold))
-                    Text(model.activeAssistants.isEmpty
-                         ? "Add your role, background, and instructions so CueLens can ground suggestions in your experience."
-                         : "Choose an assistant, confirm the audio sources and providers, and review what will be saved.")
-                        .foregroundStyle(.secondary)
-                    Button(model.activeAssistants.isEmpty ? "New Assistant" : "Session Setup") {
-                        if model.activeAssistants.isEmpty { create() }
-                        else { model.selection = .session }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .accessibilityIdentifier("overviewPrimaryAction")
-                }
-                if !model.preferences.setupComplete {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("First-time setup").font(.headline).accessibilityAddTraits(.isHeader)
-                        setupRow("Choose processing", detail: "Choose on-device transcription or OpenAI Realtime, and connect OpenAI, Claude, or Gemini for answers.",
-                                 icon: "slider.horizontal.3", action: "Providers", section: .providers)
-                        setupRow("Test audio and review permissions", detail: "Open session setup to choose audio sources and review data and retention.",
-                                 icon: "mic", action: "Session Setup", section: .session)
-                        Button("Finish Setup") {
-                            var settings = model.preferences
-                            settings.setupComplete = true
-                            model.savePreferences(settings)
-                        }
-                    }
-                }
-                HStack {
-                    Button("Show Floating Bar", systemImage: "macwindow.on.rectangle") { model.overlay.toggle() }
-                    Button("Screen Share Test", systemImage: "rectangle.dashed") { model.selection = .privacy }
-                }
-                CueCard {
-                    HStack {
-                        Label("CueLens resources", systemImage: "gauge.with.needle").font(.headline)
-                        Spacer()
-                        Text(model.resources.condition.rawValue).foregroundStyle(.secondary)
-                    }
-                    HStack(spacing: 16) {
-                        if let cpu = model.resources.cpuPercent { Text(String(format: "%.1f%% CPU", cpu)) }
-                        if let memory = model.resources.memoryMB { Text(String(format: "%.0f MB memory", memory)) }
-                        Text(model.preferences.resourcePreset.rawValue + " preset")
-                    }.font(.callout.monospacedDigit()).foregroundStyle(.secondary)
-                }
-                if !model.history.isEmpty {
-                    Button("View Session History") { model.selection = .history }
-                }
-            }
-            .frame(maxWidth: 780)
-            .padding(30)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
-        .task {
-            while !Task.isCancelled {
-                model.resources.sample()
-                try? await Task.sleep(for: .seconds(3))
-            }
-        }
-    }
-
-    private func setupRow(_ title: String, detail: String, icon: String, action: String, section: NavigationSection) -> some View {
-        CueCard {
-            HStack(alignment: .center, spacing: 14) {
-                Image(systemName: icon)
-                    .foregroundStyle(CueStyle.accent)
-                    .font(.title3)
-                    .frame(width: 27)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(.headline)
-                    Text(detail).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button(action) { model.selection = section }
-            }
-        }
     }
 }
 

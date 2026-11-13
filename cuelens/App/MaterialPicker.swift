@@ -19,6 +19,7 @@ struct MaterialPicker: View {
     @State private var source = Source.upload
     @State private var chooseFiles = false
     @State private var importing = false
+    @State private var importTask: Task<Void, Never>?
     @State private var files = [KnowledgeFile]()
     @State private var errors = [String]()
     @State private var target = false
@@ -35,7 +36,7 @@ struct MaterialPicker: View {
         guard !importing, available > 0 else { return false }
         switch source {
         case .upload: return !files.isEmpty
-        case .library: return library.contains { $0.id == selected }
+        case .library: return documents.contains { $0.id == selected }
         case .paste: return !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
@@ -60,7 +61,7 @@ struct MaterialPicker: View {
             Spacer(minLength: 0)
             HStack {
                 Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Cancel") { cancelImport(); dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Attach to Assistant") { complete() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canAttach)
@@ -68,6 +69,7 @@ struct MaterialPicker: View {
         }
         .padding(21)
         .frame(width: 545, height: 405)
+        .onDisappear { cancelImport() }
         .fileImporter(isPresented: $chooseFiles, allowedContentTypes: [
             .pdf, .plainText, UTType(filenameExtension: "docx") ?? .data, UTType(filenameExtension: "md") ?? .plainText
         ], allowsMultipleSelection: kind == .reference) { result in
@@ -137,21 +139,36 @@ struct MaterialPicker: View {
         importing = true
         files = []
         errors = []
-        Task {
-            let result = await Task.detached(priority: .userInitiated) {
+        importTask = Task {
+            let worker = Task.detached(priority: .userInitiated) {
                 var materials = [KnowledgeFile]()
                 var failures = [String]()
                 for url in selectedURLs {
+                    guard !Task.isCancelled else { break }
                     do { materials.append(try KnowledgeImport.read(url, kind: kind)) }
+                    catch is CancellationError { break }
                     catch { failures.append(url.lastPathComponent + " · " + error.localizedDescription) }
                 }
                 return (materials, failures)
-            }.value
+            }
+            let result = await withTaskCancellationHandler {
+                await worker.value
+            } onCancel: {
+                worker.cancel()
+            }
+            guard !Task.isCancelled else { return }
             files = result.0
             errors = result.1
             if urls.count > selectedURLs.count { errors.append("Only \(selectedURLs.count) files fit this attachment.") }
             importing = false
+            importTask = nil
         }
+    }
+
+    private func cancelImport() {
+        importTask?.cancel()
+        importTask = nil
+        importing = false
     }
 
     private func complete() {

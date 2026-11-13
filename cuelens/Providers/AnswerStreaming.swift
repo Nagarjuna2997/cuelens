@@ -24,16 +24,27 @@ protocol AnswerStreaming {
 struct HTTPAnswerStream: AnswerStreaming {
     func stream(_ prompt: ProviderPrompt, connection: ProviderConnection,
                 emit: @escaping @Sendable (AnswerEvent) async -> Void) async throws {
+        try Task.checkCancellation()
         let (bytes, response) = try await ProviderHTTP.answers.bytes(for: connection.request(prompt))
         defer { bytes.task.cancel() }
         try ProviderHTTP.validate(response)
+        try await withTaskCancellationHandler {
+            try await consume(bytes, provider: connection.selection.provider, emit: emit)
+        } onCancel: {
+            bytes.task.cancel()
+        }
+    }
+
+    private func consume(_ bytes: URLSession.AsyncBytes, provider: AnswerProvider,
+                         emit: @escaping @Sendable (AnswerEvent) async -> Void) async throws {
+        try Task.checkCancellation()
         var reader = ServerSentEvents()
         var receivedText = false
         var completed = false
         for try await byte in bytes {
             guard let payload = try reader.consume(byte: byte) else { continue }
             try Task.checkCancellation()
-            for event in try AnswerEvent.decode(payload, provider: connection.selection.provider) {
+            for event in try AnswerEvent.decode(payload, provider: provider) {
                 if case .text(let token) = event, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     receivedText = true
                 }
@@ -131,7 +142,10 @@ extension AnswerEvent {
             case "message_delta":
                 let delta = object["delta"] as? [String: Any]
                 if delta?["stop_reason"] as? String == "refusal" { throw ProviderError.refused }
-                if delta?["stop_reason"] as? String == "max_tokens" { throw ProviderError.incomplete }
+                if let reason = delta?["stop_reason"] as? String,
+                   reason == "max_tokens" || reason == "model_context_window_exceeded" {
+                    throw ProviderError.incomplete
+                }
                 return usage(object["usage"], input: "input_tokens", output: "output_tokens")
             case "message_stop": return [.finished]
             case "error": throw ProviderError.invalidResponse

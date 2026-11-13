@@ -8,7 +8,6 @@ final class CueLensTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let vault = Vault(directory: directory)
         let model = AppModel(vault: vault, credentials: TestCredentials())
-        XCTAssertFalse(model.saveAssistant(AssistantProfile(name: "  ")))
         var profile = AssistantProfile(name: "  Platform Engineer  ", background: "Built an iOS app.")
         XCTAssertTrue(model.saveAssistant(profile))
         XCTAssertEqual(model.assistants.first?.name, "Platform Engineer")
@@ -20,6 +19,25 @@ final class CueLensTests: XCTestCase {
         XCTAssertTrue(model.saveAssistant(duplicate))
         model.deleteAssistant(profile.id)
         XCTAssertEqual(try vault.load().assistants, [duplicate])
+    }
+
+    @MainActor
+    func testBlankAssistantsSaveAndUseReadableNames() throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let vault = Vault(directory: directory)
+        let model = AppModel(vault: vault, credentials: TestCredentials())
+        let first = AssistantProfile(name: "  ")
+        let second = AssistantProfile()
+        let role = AssistantProfile(jobTitle: "  iOS Developer  ")
+        XCTAssertTrue(model.saveAssistant(first))
+        XCTAssertTrue(model.saveAssistant(second))
+        XCTAssertTrue(model.saveAssistant(role))
+        XCTAssertTrue(model.saveAssistant(first))
+        let saved = try vault.load().assistants
+        XCTAssertEqual(saved.map(\.id), [first.id, second.id, role.id])
+        XCTAssertEqual(saved.map(\.name), ["Untitled Assistant", "Untitled Assistant 2", "iOS Developer"])
+        XCTAssertTrue(saved.allSatisfy { $0.knowledge.isEmpty && $0.background.isEmpty })
     }
 
     func testProviderSelectionAndCredentialBoundary() throws {

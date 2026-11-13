@@ -11,18 +11,17 @@ struct AssistantEditor: View {
     @State private var response: CustomResponse?
     @State private var showBackground = false
 
-    private var canSave: Bool { !profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var remaining: Int { max(0, KnowledgeImport.documentLimit - profile.knowledge.count) }
 
     var body: some View {
         VStack(spacing: 0) {
             PageHeader(title: model.assistants.contains(where: { $0.id == profile.id }) ? "Edit Assistant" : "Create Assistant",
-                       subtitle: "Set up a profile for an interview or meeting.")
+                       subtitle: "Every field is optional. Save now or add details later.")
                 .padding(22)
             Divider()
             Form {
                 Section("Basics") {
-                    TextField("Name", text: $profile.name, prompt: Text("iOS Developer Interview"))
+                    TextField("Name", text: $profile.name, prompt: Text("Uses the job title or Untitled Assistant"))
                         .accessibilityIdentifier("assistantName")
                     Picker("Meeting type", selection: $profile.kind) {
                         ForEach(MeetingKind.allCases) { Text($0.rawValue).tag($0) }
@@ -39,7 +38,7 @@ struct AssistantEditor: View {
                         Button("Add Material", systemImage: "paperclip") { attachment = .reference }
                     }.disabled(remaining == 0)
                     if profile.knowledge.isEmpty {
-                        Text("Attach a résumé and job description for this profile. You can also paste text or reuse material from another assistant.")
+                        Text("You can attach a résumé or job description, paste a note, or reuse a saved document.")
                             .foregroundStyle(.secondary)
                     }
                     ForEach(profile.knowledge) { file in
@@ -99,11 +98,10 @@ struct AssistantEditor: View {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Save Assistant") { save(launch: false) }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!canSave)
                     .accessibilityIdentifier("saveAssistant")
                 Button("Save & Launch") { save(launch: true) }
                     .buttonStyle(.borderedProminent)
-                    .disabled(!canSave || profile.archived)
+                    .disabled(profile.archived)
             }
             .padding(16)
         }

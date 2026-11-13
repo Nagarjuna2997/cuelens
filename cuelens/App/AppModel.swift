@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Observation
 
 @MainActor
@@ -11,6 +12,9 @@ final class AppModel {
     let virtualCamera = VirtualCameraControl()
     let resources = Resources()
     @ObservationIgnored lazy var overlay = FloatingWindow(model: self)
+    @ObservationIgnored lazy var cameraWindow = StudioCameraWindow(model: self)
+    @ObservationIgnored private var cameraSettingsSave: Task<Void, Never>?
+    @ObservationIgnored private var terminationSubscription: AnyCancellable?
     var selectedAssistantID: UUID?
     private(set) var workspace = Workspace()
     private(set) var history = [MeetingSession]()
@@ -31,19 +35,48 @@ final class AppModel {
         do { history = try vault.sessions() }
         catch { self.error = "CueLens couldn’t read the session history. Check the Sessions folder in \(vault.directory.path)." }
         live.onSaved = { [weak self] session in self?.updateHistory(session) }
+        if let settings = workspace.camera { camera.applySettings(settings) }
+        camera.onSettingsChanged = { [weak self] settings in
+            self?.cameraSettingsSave?.cancel()
+            self?.cameraSettingsSave = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled else { return }
+                self?.update { $0.camera = settings }
+            }
+        }
+        terminationSubscription = NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)
+            .sink { [weak self] _ in
+                // AppKit posts this synchronously on the main actor. An asynchronous
+                // task would not be guaranteed to run before the process exits.
+                MainActor.assumeIsolated { self?.flushCameraSettings() }
+            }
         live.onEmergency = { [weak self] in self?.camera.stop() }
+        live.onEnded = { [weak self] in
+            self?.camera.stop()
+            self?.cameraWindow.hide()
+            self?.overlay.showBar()
+        }
         resources.onConditionChange = { [weak self] condition in
             self?.camera.lowResources = condition.reducesWork
             self?.live.setResources(condition)
         }
         camera.lowResources = resources.condition.reducesWork
+        camera.preset = workspace.preferences.resourcePreset
         live.setResources(resources.condition)
+    }
+
+    func flushCameraSettings() {
+        cameraSettingsSave?.cancel()
+        cameraSettingsSave = nil
+        let settings = camera.settingsSnapshot
+        guard workspace.camera != settings else { return }
+        update { $0.camera = settings }
     }
 
     func openSessionSetup() {
         selection = .session
         if let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("main") == true })
-            ?? NSApp.windows.first(where: { !($0 is NSPanel) && $0.canBecomeKey && $0.title == "CueLens Pro" }) {
+            ?? NSApp.windows.first(where: { !($0 is NSPanel) && $0.canBecomeKey && $0.title == "CueLens" }) {
             NSApp.activate(ignoringOtherApps: true)
             if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
@@ -53,7 +86,18 @@ final class AppModel {
     }
 
     func minimizeMainWindow() {
-        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true }?.miniaturize(nil)
+        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true }?.orderOut(nil)
+    }
+
+    func endSession() {
+        minimizeMainWindow()
+        overlay.showBar()
+        live.end()
+    }
+
+    func openSection(_ section: NavigationSection) {
+        openSessionSetup()
+        selection = section
     }
 
     var openMainWindow: (() -> Void)?
@@ -81,11 +125,23 @@ final class AppModel {
     func saveAssistant(_ profile: AssistantProfile) -> Bool {
         var profile = profile
         profile.name = profile.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !profile.name.isEmpty else {
-            error = "Give this assistant a name."
-            return false
-        }
         return update { workspace in
+            if profile.name.isEmpty {
+                let jobTitle = profile.jobTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                if jobTitle.isEmpty {
+                    let taken = Set(workspace.assistants.lazy.filter { $0.id != profile.id }.map(\.name))
+                    let base = "Untitled Assistant"
+                    var name = base
+                    var suffix = 2
+                    while taken.contains(name) {
+                        name = "\(base) \(suffix)"
+                        suffix += 1
+                    }
+                    profile.name = name
+                } else {
+                    profile.name = jobTitle
+                }
+            }
             if let index = workspace.assistants.firstIndex(where: { $0.id == profile.id }) {
                 workspace.assistants[index] = profile
             } else {
@@ -136,6 +192,9 @@ final class AppModel {
         do {
             try vault.save(next)
             workspace = next
+            if camera.preset != next.preferences.resourcePreset {
+                camera.preset = next.preferences.resourcePreset
+            }
             return true
         } catch {
             self.error = "CueLens couldn’t save the workspace. Check available storage and try again."
@@ -145,7 +204,8 @@ final class AppModel {
 }
 
 enum NavigationSection: String, CaseIterable, Identifiable {
-    case home = "Overview"
+    case home = "Studio"
+    case practice = "Practice"
     case assistants = "Assistants"
     case session = "Live Session"
     case history = "History"
@@ -158,6 +218,7 @@ enum NavigationSection: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .home: "rectangle.grid.2x2"
+        case .practice: "graduationcap"
         case .assistants: "person.crop.rectangle"
         case .session: "waveform"
         case .history: "clock.arrow.circlepath"

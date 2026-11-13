@@ -3,8 +3,8 @@ import Foundation
 import Security
 
 private enum Video {
-    static let width: Int32 = 640
-    static let height: Int32 = 480
+    static let width: Int32 = 1_280
+    static let height: Int32 = 720
     static let duration = CMTime(value: 1, timescale: 30)
     static let deviceID = UUID(uuidString: "4D1DE982-586D-49C9-93E5-6E10E0F442A6")!
     static let sourceID = UUID(uuidString: "B9DF0AD3-959D-45AC-B35B-C9673194035D")!

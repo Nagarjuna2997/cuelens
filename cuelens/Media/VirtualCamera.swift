@@ -6,12 +6,13 @@ import Observation
 import SystemExtensions
 
 enum VirtualCameraFailure: LocalizedError {
-    case deviceUnavailable, start(Int32), frame
+    case deviceUnavailable, start(Int32), frame, formatMismatch
     var errorDescription: String? {
         switch self {
         case .deviceUnavailable: "CueLens Camera isn’t available. Check its approval in System Settings and restart the meeting app."
         case .start(let code): "CueLens couldn’t open its virtual camera input (\(code)). Use your physical camera while checking the extension."
         case .frame: "CueLens couldn’t prepare a virtual camera frame. Use your physical camera."
+        case .formatMismatch: "The installed CueLens Camera uses an older video format. Update the camera extension, then reopen your meeting app."
         }
     }
 }
@@ -75,8 +76,8 @@ final class VirtualCameraControl: NSObject, OSSystemExtensionRequestDelegate {
 
 final class VirtualCameraOutput {
     private static let uid = "4D1DE982-586D-49C9-93E5-6E10E0F442A6"
-    private static let width = 640
-    private static let height = 480
+    private static let width = 1_280
+    private static let height = 720
     private static let fps: Int32 = 30
 
     private let device: CMIODeviceID
@@ -90,6 +91,7 @@ final class VirtualCameraOutput {
 
     init() throws {
         guard let (device, stream) = Self.findInput() else { throw VirtualCameraFailure.deviceUnavailable }
+        guard Self.supportsOutputFormat(stream) else { throw VirtualCameraFailure.formatMismatch }
         self.device = device
         input = stream
         var unmanaged: Unmanaged<CMSimpleQueue>?
@@ -165,6 +167,19 @@ final class VirtualCameraOutput {
             }
         }
         return nil
+    }
+
+    private static func supportsOutputFormat(_ stream: CMIOStreamID) -> Bool {
+        var address = property(kCMIOStreamPropertyFormatDescription)
+        var unmanaged: Unmanaged<CMFormatDescription>?
+        var used: UInt32 = 0
+        let status = CMIOObjectGetPropertyData(stream, &address, 0, nil,
+                                               UInt32(MemoryLayout<Unmanaged<CMFormatDescription>?>.size), &used, &unmanaged)
+        guard status == noErr, let unmanaged else { return false }
+        let description = unmanaged.takeRetainedValue()
+        let dimensions = CMVideoFormatDescriptionGetDimensions(description)
+        return Int(dimensions.width) == width && Int(dimensions.height) == height
+            && CMFormatDescriptionGetMediaSubType(description) == kCVPixelFormatType_32BGRA
     }
 
     private static func ids(_ device: CMIOObjectID, selector: Int) -> [CMIOObjectID] {

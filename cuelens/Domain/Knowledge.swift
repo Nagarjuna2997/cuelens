@@ -20,6 +20,7 @@ enum KnowledgeImport {
     static let documentLimit = 20
 
     static func read(_ url: URL, kind: MaterialKind) throws -> KnowledgeFile {
+        try Task.checkCancellation()
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         let values = try url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
@@ -51,6 +52,7 @@ enum KnowledgeImport {
             throw KnowledgeImportError.unsupported
         }
 
+        try Task.checkCancellation()
         let clean = text?.replacingOccurrences(of: "\0", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !clean.isEmpty else { throw KnowledgeImportError.noText }
@@ -131,6 +133,7 @@ private struct WordArchive {
         guard entryCount <= 4_096 else { throw failure }
 
         for _ in 0..<entryCount {
+            try Task.checkCancellation()
             guard offset + 46 <= end, number(offset, count: 4) == 0x02014b50 else { throw failure }
             let nameSize = number(offset + 28, count: 2)
             let nameOffset = offset + 46
@@ -184,6 +187,8 @@ struct KnowledgeIndex {
             ("\($0.kind?.rawValue ?? "Reference") · \($0.name)", String($0.text.prefix(KnowledgeImport.textLimit)))
         }
         materials.insert(("User background", String(assistant.background.prefix(KnowledgeImport.textLimit))), at: 0)
+        materials.append(("Job description · Role requirements, not personal experience",
+                          String(assistant.jobDescription.prefix(KnowledgeImport.textLimit))))
         var index = [Passage]()
         var counts = [String: Int]()
         for (label, text) in materials {
@@ -228,11 +233,23 @@ struct KnowledgeIndex {
         return result
     }
 
+    private static let tokenPattern = try! NSRegularExpression(
+        pattern: #"(?<![\p{L}\p{N}])(?:c\+\+|c#|f#|\.net|node\.js|[\p{L}\p{N}]+)(?![\p{L}\p{N}])"#
+    )
+
     private static func tokens(_ text: String) -> Set<String> {
         let excluded: Set<String> = ["about", "could", "would", "should", "that", "this", "your", "what", "when",
                                      "where", "with", "which", "have", "tell", "does", "from", "were", "been",
-                                     "please", "some", "them", "they", "into", "using", "used"]
-        return Set(text.lowercased().split { !$0.isLetter && !$0.isNumber }
-            .filter { $0.count > 2 }.map(String.init)).subtracting(excluded)
+                                     "please", "some", "them", "they", "into", "using", "used", "the", "and",
+                                     "for", "are", "you", "how", "can", "did", "was", "has", "had"]
+        let shortSkills: Set<String> = ["ai", "ml", "go", "r", "c", "ui", "ux", "ci", "cd", "qa", "os", "db", "js", "ts", "py", "c#", "f#"]
+        let lower = text.lowercased()
+        // Keep technical names intact: splitting on punctuation loses C++/C# and .NET,
+        // while a blanket minimum length discards Go, AI, and ML.
+        return Set(tokenPattern.matches(in: lower, range: NSRange(lower.startIndex..., in: lower)).compactMap { match in
+            guard let range = Range(match.range, in: lower) else { return nil }
+            let term = String(lower[range])
+            return term.count > 2 || shortSkills.contains(term) ? term : nil
+        }).subtracting(excluded)
     }
 }

@@ -1,26 +1,39 @@
 # Architecture and privacy
 
-The main app uses SwiftUI for the sidebar, setup, assistants, provider settings, and history. AppKit supplies floating panels and Carbon registers the session shortcuts. The app runs on macOS 14.2 or later because system audio uses Core Audio process taps. ScreenCaptureKit provides the user-selected one-frame window capture.
+CueLens is a native macOS app. SwiftUI provides Studio, assistants, providers, practice, history, and settings. AppKit supplies the movable session panel, compact bar, and camera preview; Carbon registers shortcuts only for the live session. The minimum macOS version is 14.2 because meeting audio uses Core Audio process taps.
 
-- `cuelens/App` contains app state, the session and editor views, and window control.
-- `cuelens/Domain` contains assistant and session data, storage, document extraction, local retrieval, and export.
-- `cuelens/Media` contains audio capture, speech, window images, and the local camera pipeline.
-- `cuelens/Providers` contains the Keychain interface, fixed vendor endpoints, text and image streaming adapters, and OpenAI Realtime transcription.
-- `cuelens/Session` coordinates user-approved capture and provider requests. Request identity prevents superseded responses from updating the UI. A local document index retrieves excerpts from the selected assistant only.
-- `CameraExtension` is the optional Core Media I/O extension. It relays frames from its same-team, signed host. The host starts publishing only on request and uses the original camera image when correction is unavailable.
+| Area | Responsibility |
+| --- | --- |
+| `cuelens/App` | App state, navigation, editors, camera controls, practice, and session windows |
+| `cuelens/Domain` | Codable models, atomic local storage, document extraction, profile-scoped retrieval, practice progress, and export |
+| `cuelens/Media` | Microphone/system audio, Apple speech, screen images, local camera tracking, framing, and effects |
+| `cuelens/Providers` | Keychain credentials, fixed vendor endpoints, streaming text/images, and opt-in OpenAI Realtime transcription |
+| `cuelens/Session` | Capture lifecycle, context assembly, manual/automatic answer requests, cancellation, and saving |
+| `CameraExtension` | Optional Core Media I/O video source receiving processed frames from the authorized host |
+
+## Camera pipeline
+
+AVFoundation captures a selected camera and supported format. A dedicated processing queue runs Vision tracking, smoothed crop/framing, and Core Image effects. The result feeds the local preview and, when explicitly enabled and available, the virtual-camera publisher. Resource pressure can reduce processing quality. Tracking loss widens the frame instead of making a sudden crop toward an uncertain position.
+
+Framing follows a subject by cropping; it does not rotate their head or eyes. Posture cues use detected geometry and a seated calibration, not medical or emotional judgments. Eye-contact correction is unavailable in the active pipeline until a licensed, tested model is integrated. Historical gaze-warp files are not evidence of a working production correction feature. See [camera behavior](camera.md).
+
+## Audio and answers
+
+Microphone and meeting audio use separate capture and speech pipelines. Each reports its source state independently; recording can continue when recognition fails. PCM is normalized for the selected recognizer. Apple Speech requires on-device recognition; locale resources must be available. OpenAI Realtime sends audio only when selected and explicitly enabled for that session. A Core Audio tap can include other applications playing on the Mac; a source label is not speaker diarization.
+
+Manual **Answer** sends the typed question or recent transcript, relevant excerpts from the selected assistant, and an attached image when present. Automatic answers are an explicit session option. Provider requests are asynchronous and carry request identity so cancelled or superseded results cannot overwrite a newer answer. The local document index never retrieves material from another assistant. Practice progress is saved per assistant and uses text-derived feedback; it does not fine-tune a provider model.
+
+The built-in answer providers are OpenAI, Anthropic, and Google, through fixed HTTPS endpoints. Their clients use ephemeral sessions, disable cookies, and reject redirects. OpenAI answer requests set `store: false`; this is not a promise that every provider retains no data. There is no CueLens relay server. Account billing and retention remain subject to the chosen provider's terms.
 
 ## Data and permissions
 
-- Profiles, extracted text, preferences, and screen-share observations are stored in `workspace.json`. Saved session data is under `Sessions/`. Optional CAF files are under `Audio/<session-id>/`. The sandboxed build resolves these under `~/Library/Containers/org.cuelens.mac/Data/Library/Application Support/CueLens/`. A signing build with another bundle ID uses that ID’s container.
-- The app keeps imported text rather than the source PDF or DOCX. Reused material is copied into the selected assistant. To remove all copies, remove it from each profile that uses it. Deleting a session removes its transcript and associated audio.
-- Audio starts after an explicit session or audio check action. The audio check meters input and uses no transcription provider. Live sources can be paused, toggled, or restarted. A tap can include other apps that play audio on the Mac. “Meeting audio” identifies a source and does not identify individual speakers.
-- Apple on-device recognition sets the request to require on-device processing. Availability depends on locale and the speech resources macOS has for that locale. OpenAI Realtime sends audio to OpenAI only with the session’s cloud switch enabled.
-- Answer requests send a bounded recent transcript and relevant profile excerpts to the configured provider. A window image is sent only after preview and the send action. A capture stays in memory while it can be retried. Summaries ask for separate confirmation.
-- Cloud data handling and billing depend on the provider account. OpenAI response requests set `store: false`. The app does not provide telemetry. Provider keys are stored in non-synchronizing Keychain items and excluded from workspace and session exports.
-- Plain-text exports can contain confidential information. Store or share them using the same care as your résumé and meeting notes.
+- Camera capture begins with **Start Camera** or an explicit session choice and stops with the corresponding stop/end action. Microphone, speech, system audio, camera, and screen capture have separate macOS permissions. Enabling one does not grant the others.
+- Profiles, extracted material, settings, practice progress, and share-test observations live in `workspace.json`. Saved sessions are under `Sessions/`; optional CAF recordings are under `Audio/<session-id>/`. The sandbox resolves these under `~/Library/Containers/org.cuelens.mac/Data/Library/Application Support/CueLens/`. A different bundle identifier uses a different container.
+- Import keeps extracted text rather than the original PDF/DOCX. Reusing material copies it into that assistant. Removing every copy requires removing it from each assistant that uses it.
+- Recording and screen context require session opt-in. Audio checking meters local input without sending it for transcription. Local camera frames are not sent to an answer provider or saved as video by the active pipeline.
+- Screen capture is a requested still image, previewed before **Answer** sends it. It remains in memory for removal or retry. Excluding CueLens from its own screenshot does not make its windows invisible to conferencing software.
+- Session transcript/answer saving is configurable. Ending stops capture and returns to the compact bar. Deleting a saved session removes its transcript and associated audio. There is no automatic retention deadline.
+- Provider keys use non-synchronizing Keychain items and are excluded from workspace files, exports, and Git. No app telemetry is implemented. Summarization requires a separate confirmation and sends the bounded saved transcript to the selected provider.
+- Exports can contain personal material. The application does not encrypt exported TXT/Markdown files; choose their destination and sharing intentionally.
 
-## Dependencies and licenses
-
-CueLens Pro and its icon source are MIT licensed. Runtime code uses macOS system frameworks only. The app does not redistribute model weights. Speech and face landmarks use Apple system services. The three optional answer services are operated by OpenAI, Anthropic, and Google. Their service terms and models are separate from this repository’s license.
-
-API references [Apple Core Audio taps](https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps), [OpenAI streaming](https://developers.openai.com/api/docs/guides/streaming-responses), [OpenAI Realtime transcription](https://developers.openai.com/api/docs/guides/realtime-transcription), [Anthropic streaming](https://platform.claude.com/docs/en/build-with-claude/streaming), [Gemini content streaming](https://aistudio.google.com/api-reference/generate-content)
+See [dependencies and licenses](dependencies.md), [audio](audio.md), and [validation](validation.md) for implementation limits and test evidence.

@@ -17,6 +17,9 @@ final class LiveSession {
     private(set) var starting = Set<AudioSource>()
     private(set) var enabled = Set<AudioSource>()
     private(set) var activeSources = Set<AudioSource>()
+    private(set) var clippedSources = Set<AudioSource>()
+    private(set) var transcribingSources = Set<AudioSource>()
+    private(set) var recordingSources = Set<AudioSource>()
     private(set) var currentProvider = ProviderSelection(provider: .disabled, model: "")
     private(set) var question = ""
     private(set) var answer = ""
@@ -27,9 +30,13 @@ final class LiveSession {
     private(set) var usage = TokenUsage()
     private(set) var transcriptionDelay: TimeInterval?
     private(set) var practiceQuestion = ""
+    private(set) var practiceMetrics: PracticeMetrics?
+    private(set) var practiceHint = ""
     private(set) var pendingSave: MeetingSession?
     private(set) var resourceCondition = ResourceCondition.normal
     private(set) var captureImage: CaptureImage?
+    private(set) var capturing = false
+    private(set) var completionMessage: String?
     var captureError: String?
     var composer = ""
     var length = AnswerLength.short
@@ -37,6 +44,7 @@ final class LiveSession {
     var onSaved: ((MeetingSession) -> Void)?
     var onStateChanged: (() -> Void)?
     var onEmergency: (() -> Void)?
+    var onEnded: (() -> Void)?
 
     @ObservationIgnored private let vault: Vault
     @ObservationIgnored private let credentials: any CredentialStore
@@ -56,6 +64,10 @@ final class LiveSession {
     @ObservationIgnored private var audioPart = [AudioSource: Int]()
     @ObservationIgnored private var checkpoint: Task<Void, Never>?
     @ObservationIgnored private let capture = WindowCapture()
+    @ObservationIgnored private var captureWork: Task<Void, Never>?
+    @ObservationIgnored private var captureID: UUID?
+    @ObservationIgnored private var practiceSpeech = [PracticeSpeechSegment]()
+    @ObservationIgnored private var feedbackAttemptID: UUID?
 
     init(vault: Vault, credentials: any CredentialStore, streamer: any AnswerStreaming = HTTPAnswerStream()) {
         self.vault = vault
@@ -65,7 +77,12 @@ final class LiveSession {
 
     var isOpen: Bool { phase != .idle }
     var canAnswer: Bool { isOpen && phase != .ending && currentProvider.provider != .disabled }
+    var canCapture: Bool { (phase == .active || phase == .paused) && options.screenContext }
+    var speechProvider: SpeechProvider {
+        settings.speechProvider == .openAI && !options.allowCloud ? .onDevice : settings.speechProvider
+    }
     var responses: [Suggestion] { record?.suggestions ?? [] }
+    var practiceAttempts: [PracticeAttempt] { record?.practiceAttempts ?? [] }
     var pinnedResponses: [Suggestion] { responses.filter { $0.pinned == true } }
     var canStepBack: Bool {
         guard !generating, !responses.isEmpty else { return false }
@@ -83,8 +100,10 @@ final class LiveSession {
     var audioSourceLabel: String {
         if phase == .paused { return "Paused" }
         if phase == .ending { return "Ending" }
-        if audioLive { return savingAudio ? "Recording audio" : "Listening" }
+        if !recordingSources.isEmpty { return "Recording audio" }
+        if audioLive { return "Listening" }
         if !starting.isEmpty { return "Connecting audio" }
+        if !enabled.isEmpty && !audioErrors.isEmpty { return "Audio needs attention" }
         return "Audio off"
     }
 
@@ -93,17 +112,22 @@ final class LiveSession {
         self.assistant = assistant
         self.settings = settings
         self.options = options
+        completionMessage = nil
         currentProvider = settings.answerSelection(for: assistant)
         let title = options.title.trimmingCharacters(in: .whitespacesAndNewlines)
         record = MeetingSession(title: title.isEmpty ? "\(assistant.name) \(options.practice ? "practice" : "session")" : title,
                                 assistantID: assistant.id, assistantName: assistant.name)
+        if options.practice { record?.practiceStyle = options.practiceStyle }
         phase = .active
         partial.removeAll()
         audioErrors.removeAll()
         levels.removeAll()
+        clippedSources.removeAll()
+        transcribingSources.removeAll()
+        recordingSources.removeAll()
         audioPart.removeAll()
         enabled = Set([(AudioSource.microphone, options.microphone), (.meeting, options.meetingAudio)].compactMap { $0.1 ? $0.0 : nil })
-        automatic = assistant.liveSuggestions && !options.practice
+        automatic = options.automaticAnswers && !options.practice
         length = assistant.length
         composer = ""
         question = ""
@@ -115,6 +139,10 @@ final class LiveSession {
         usage = TokenUsage()
         transcriptionDelay = nil
         practiceQuestion = ""
+        practiceMetrics = nil
+        practiceHint = ""
+        practiceSpeech.removeAll()
+        feedbackAttemptID = nil
         lastAutomatic = nil
         lastImage = nil
         captureImage = nil
@@ -125,7 +153,7 @@ final class LiveSession {
         for source in enabled { startSource(source) }
         scheduleCheckpoint()
         onStateChanged?()
-        if options.practice && canAnswer { nextPracticeQuestion() }
+        if options.practice && canAnswer { nextPracticeQuestion(reviewing: options.reviewTopic) }
     }
 
     func pause() {
@@ -163,11 +191,12 @@ final class LiveSession {
     func end() {
         guard isOpen, phase != .ending else { return }
         phase = .ending
+        preservePartialAnswer(reason: "Response interrupted when the session ended.")
+        completionMessage = options.save ? "Saving session…" : "Session ended"
         cancelAnswer()
         indexTask?.cancel()
         indexTask = nil
         index = nil
-        capture.cancel()
         discardImage()
         lastImage = nil
         for source in enabled { stopSource(source, retainPartial: true) }
@@ -184,7 +213,9 @@ final class LiveSession {
                 retrySave()
             }
             record = nil
+            stoppingTasks.removeAll()
             phase = .idle
+            onEnded?()
             onStateChanged?()
         }
     }
@@ -194,8 +225,10 @@ final class LiveSession {
         do {
             try vault.save(finished)
             pendingSave = nil
+            completionMessage = "Saved to History"
             onSaved?(finished)
         } catch {
+            completionMessage = "Save needs attention"
             answerError = "CueLens couldn’t finish saving. Free up disk space and retry."
         }
     }
@@ -211,24 +244,24 @@ final class LiveSession {
     func emergencyStop() {
         pause()
         cancelAnswer()
-        capture.cancel()
         discardImage()
         lastImage = nil
         onEmergency?()
     }
 
     func askComposer() {
+        guard !capturing else { captureError = "Finishing capture. Press Answer when the preview appears."; return }
+        guard canAnswer else { answerError = ProviderError.providerDisabled.localizedDescription; return }
         let text = composer.trimmingCharacters(in: .whitespacesAndNewlines)
         if captureImage != nil {
             sendCapture(question: text)
             return
         }
         guard !text.isEmpty else { answerLatest(); return }
-        composer = ""
         if options.practice, !practiceQuestion.isEmpty {
-            submitPracticeAnswer(text)
+            if submitPracticeAnswer(text) { composer = "" }
         } else {
-            generate(text, task: .suggestion)
+            if generate(text, task: .suggestion) { composer = "" }
         }
     }
 
@@ -239,22 +272,23 @@ final class LiveSession {
     }
 
     func answerLatest(task: AnswerTask = .suggestion) {
-        guard canAnswer else { return }
+        guard canAnswer else { answerError = ProviderError.providerDisabled.localizedDescription; return }
         let recent = record?.transcript.suffix(16).reversed() ?? [].reversed()
-        if let partial = partial[.meeting], !partial.isEmpty {
+        let questionSource: AudioSource = enabled.contains(.meeting) ? .meeting : .microphone
+        if let partial = partial[.meeting] ?? partial[questionSource], !partial.isEmpty {
             let text = QuestionDetection.question(in: partial, source: .meeting, locale: settings.speechLocale) ?? partial
             lastAutomatic = (QuestionDetection.normalized(text), Date())
             generate(text, task: task)
         } else if let entry = recent.first(where: {
             QuestionDetection.question(in: $0.text, source: $0.source, locale: settings.speechLocale) != nil
-        }) ?? recent.first(where: { $0.source == .meeting }) {
+        }) ?? recent.first(where: { $0.source == .meeting || $0.source == questionSource || $0.source == .manual }) {
             let text = QuestionDetection.question(in: entry.text, source: .meeting, locale: settings.speechLocale) ?? entry.text
             generate(text, task: task)
         } else if !question.isEmpty {
             if task == .suggestion { regenerate() }
             else { generate(question, task: task) }
         } else {
-            answerError = "Type a question or wait for meeting audio."
+            answerError = "Type a question, capture an image, or wait for the live transcript."
         }
     }
 
@@ -262,8 +296,7 @@ final class LiveSession {
         let typed = composer.trimmingCharacters(in: .whitespacesAndNewlines)
         if typed.isEmpty { answerLatest(task: task) }
         else {
-            composer = ""
-            generate(typed, task: task)
+            if generate(typed, task: task) { composer = "" }
         }
     }
 
@@ -300,7 +333,8 @@ final class LiveSession {
 
     func regenerate() {
         guard !question.isEmpty else { return }
-        generate(question, task: lastTask, ended: questionDate, image: lastImage)
+        generate(question, task: lastTask, ended: questionDate, image: lastImage,
+                 retryingPracticeAttempt: lastTask == .practiceFeedback ? feedbackAttemptID : nil)
     }
 
     func technicalAnswer() {
@@ -308,78 +342,189 @@ final class LiveSession {
         generate(question, task: lastImage == nil ? .technical : .capture, image: lastImage)
     }
 
-    func nextPracticeQuestion() {
-        generate("Ask the next interview question for this role. Previous question: \(practiceQuestion.prefix(500))",
+    func nextPracticeQuestion(reviewing topic: String? = nil) {
+        guard options.practice else { return }
+        let previous = practiceAttempts.last
+        let review = topic ?? previous?.reviewTopic ?? ""
+        generate("""
+                 Ask one \(options.practiceStyle.rawValue.lowercased()) interview question for this role.
+                 \(practiceAttempts.isEmpty ? "Start a baseline interview." : "Adapt a follow-up to the prior answer and feedback.")
+                 Review topic: \(review.prefix(180))
+                 Previous question: \(practiceQuestion.prefix(350))
+                 Previous answer: \(previous?.response.prefix(500) ?? "")
+                 Previous feedback: \(previous?.feedback.prefix(700) ?? "")
+                 Feedback status: \(previous?.feedbackStatus ?? "No prior feedback")
+                 """,
                  task: .practiceQuestion)
     }
 
+    func requestPracticeHint() {
+        guard options.practice, options.practiceHints, !practiceQuestion.isEmpty else { return }
+        generate(practiceQuestion, task: .practiceHint)
+    }
+
+    func retryPracticeAnswer() {
+        guard options.practice, !practiceQuestion.isEmpty, let started = record?.startedAt,
+              phase == .active || phase == .paused else { return }
+        cancelAnswer()
+        answer = ""
+        answerError = nil
+        composer = ""
+        responseIndex = nil
+        practiceMetrics = nil
+        practiceHint = ""
+        practiceSpeech.removeAll()
+        feedbackAttemptID = nil
+        question = ""
+        append(.init(time: Date().timeIntervalSince(started), source: .practice, text: practiceQuestion))
+    }
+
+    func schedulePracticeReview() {
+        guard let count = record?.practiceAttempts?.count, count > 0 else { return }
+        record?.practiceAttempts?[count - 1].nextReview = Calendar.current.date(byAdding: .day, value: 1, to: Date())
+        scheduleCheckpoint()
+    }
+
     func reviewSpokenPracticeAnswer() {
+        guard options.practice, !practiceQuestion.isEmpty else { return }
         let lines = record?.transcript ?? []
         let current = lines.lastIndex(where: { $0.source == .practice }).map { lines.suffix(from: $0 + 1) } ?? lines[...]
-        let spoken = current.filter { $0.source == .microphone }.map(\.text).joined(separator: " ")
+        var spoken = current.filter { $0.source == .microphone }.map(\.text).joined(separator: " ")
+        if let partial = partial[.microphone], !partial.isEmpty { spoken += " " + partial }
         if spoken.isEmpty { answerError = "Speak an answer or type it below." }
         else { submitPracticeAnswer(spoken, typed: false) }
     }
 
-    private func submitPracticeAnswer(_ text: String, typed: Bool = true) {
-        if typed { addNote(text) }
-        generate("Interview question: \(practiceQuestion.prefix(600))\nCandidate’s answer: \(text.prefix(1_350))",
-                 task: .practiceFeedback)
+    @discardableResult
+    private func submitPracticeAnswer(_ text: String, typed: Bool = true) -> Bool {
+        let speech = !typed && partial[.microphone] == nil ? practiceSpeech : []
+        let metrics = PracticeMetrics.analyze(text: text, speech: speech)
+        let attempt = PracticeAttempt(question: practiceQuestion, response: String(text.prefix(8_000)), metrics: metrics)
+        let excerpt = text.count > 1_250 ? " (excerpt; the remaining answer is omitted)" : ""
+        let accepted = generate("Interview question: \(practiceQuestion.prefix(550))\nCandidate’s answer\(excerpt): \(text.prefix(1_250))",
+                                task: .practiceFeedback, practiceAttempt: attempt)
+        if accepted { practiceMetrics = metrics }
+        if accepted && typed { addNote(text) }
+        return accepted
     }
 
     func useBackup() {
         guard let backup else { return }
-        currentProvider = .init(provider: backup, model: settings.model(for: backup))
+        let selection = ProviderSelection(provider: backup, model: settings.model(for: backup))
+        do { _ = try ProviderConnection(selection: selection, credentials: credentials) }
+        catch { answerError = error.localizedDescription; return }
+        cancelAnswer()
+        currentProvider = selection
         regenerate()
     }
 
     func pickWindow() {
-        guard canAnswer, options.allowCloud else { captureError = ProviderError.cloudApprovalRequired.localizedDescription; return }
-        captureError = nil
-        let sessionID = record?.id
+        guard requireScreenContext() else { return }
+        let id = beginCapture()
         capture.chooseWindow { [weak self] result in
-            guard let self, record?.id == sessionID, phase != .ending else { return }
-            switch result {
-            case .success(let image): if let image { captureImage = image }
-            case .failure(let error): captureError = error.localizedDescription
-            }
+            self?.finishCapture(result, id: id)
+        }
+    }
+
+    func captureScreen() {
+        guard requireScreenContext() else { return }
+        let id = beginCapture()
+        captureWork = Task { [weak self] in
+            guard let self else { return }
+            do { finishCapture(.success(try await capture.captureDisplay()), id: id) }
+            catch { if !Task.isCancelled { finishCapture(.failure(error), id: id) } }
         }
     }
 
     func attachImage(_ url: URL) {
-        guard canAnswer, options.allowCloud else { captureError = ProviderError.cloudApprovalRequired.localizedDescription; return }
-        let sessionID = record?.id
-        captureError = nil
-        Task {
+        guard requireScreenContext() else { return }
+        let id = beginCapture()
+        captureWork = Task { [weak self] in
             do {
                 let image = try await Task.detached(priority: .userInitiated) { try CaptureImage.read(url) }.value
-                if record?.id == sessionID && phase != .ending { captureImage = image }
+                try Task.checkCancellation()
+                self?.finishCapture(.success(image), id: id)
             } catch {
-                if record?.id == sessionID { captureError = error.localizedDescription }
+                if !Task.isCancelled { self?.finishCapture(.failure(error), id: id) }
             }
         }
     }
 
-    func discardImage() { captureImage = nil }
+    private func requireScreenContext() -> Bool {
+        guard phase == .active || phase == .paused else { return false }
+        guard options.screenContext else {
+            captureError = "Enable screen context in Session Setup before using Capture."
+            return false
+        }
+        return true
+    }
+
+    private func beginCapture() -> UUID {
+        discardImage()
+        let id = UUID()
+        captureID = id
+        capturing = true
+        captureError = nil
+        return id
+    }
+
+    private func finishCapture(_ result: Result<CaptureImage?, Error>, id: UUID) {
+        guard captureID == id, canCapture else { return }
+        capturing = false
+        captureWork = nil
+        captureID = nil
+        switch result {
+        case .success(let image): captureImage = image
+        case .failure(let error): captureError = error.localizedDescription
+        }
+    }
+
+    func discardImage() {
+        captureID = nil
+        captureWork?.cancel()
+        captureWork = nil
+        capture.cancel()
+        capturing = false
+        captureImage = nil
+        captureError = nil
+    }
 
     func sendCapture(question: String) {
         guard let captureImage else { return }
-        guard options.allowCloud else { captureError = ProviderError.cloudApprovalRequired.localizedDescription; return }
-        self.captureImage = nil
-        composer = ""
-        generate(question.isEmpty ? "Help me understand and solve the coding problem in this image." : question,
-                 task: .capture, image: captureImage)
+        if generate(question.isEmpty ? "Help me understand and solve the coding problem in this image." : question,
+                    task: .capture, image: captureImage) {
+            self.captureImage = nil
+            composer = ""
+        }
     }
 
     func cancelAnswer() {
+        if generating, lastTask == .practiceFeedback {
+            updatePracticeFeedback(.interrupted, error: "Feedback stopped before completion.", persist: true)
+        }
+        preservePartialAnswer(reason: "Response interrupted before completion.")
         answerID = nil
         answerWork?.cancel()
         answerWork = nil
         generating = false
     }
 
-    private func generate(_ text: String, task: AnswerTask, ended: Date? = nil, image: CaptureImage? = nil) {
-        guard phase == .active || phase == .paused, let assistant else { return }
+    private func preservePartialAnswer(reason: String) {
+        guard responseIndex == nil, !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              record != nil else { return }
+        let retained = answer + "\n\n(" + reason + ")"
+        record?.suggestions.append(.init(question: question, answer: retained, provider: currentProvider.provider))
+        responseIndex = (record?.suggestions.count ?? 1) - 1
+        scheduleCheckpoint()
+    }
+
+    @discardableResult
+    private func generate(_ text: String, task: AnswerTask, ended: Date? = nil, image: CaptureImage? = nil,
+                          practiceAttempt: PracticeAttempt? = nil, retryingPracticeAttempt: UUID? = nil) -> Bool {
+        guard phase == .active || phase == .paused, let assistant else { return false }
+        let connection: ProviderConnection
+        do { connection = try ProviderConnection(selection: currentProvider, credentials: credentials) }
+        catch { answerError = error.localizedDescription; return false }
         cancelAnswer()
         question = String(text.prefix(2_000))
         responseIndex = nil
@@ -388,10 +533,14 @@ final class LiveSession {
         lastImage = image
         answer = ""
         answerError = nil
-        guard options.allowCloud else { answerError = ProviderError.cloudApprovalRequired.localizedDescription; return }
-        let connection: ProviderConnection
-        do { connection = try ProviderConnection(selection: currentProvider, credentials: credentials) }
-        catch { answerError = error.localizedDescription; return }
+        feedbackAttemptID = practiceAttempt?.id ?? retryingPracticeAttempt
+        if let practiceAttempt {
+            if record?.practiceAttempts == nil { record?.practiceAttempts = [] }
+            record?.practiceAttempts?.append(practiceAttempt)
+        }
+        if feedbackAttemptID != nil {
+            updatePracticeFeedback(.pending, persist: true)
+        }
 
         let id = UUID()
         answerID = id
@@ -426,9 +575,16 @@ final class LiveSession {
                 timing?.completed = Date()
                 if task == .practiceQuestion {
                     practiceQuestion = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+                    practiceHint = ""
+                    practiceMetrics = nil
+                    practiceSpeech.removeAll()
                     if let started = record?.startedAt {
                         append(.init(time: Date().timeIntervalSince(started), source: .practice, text: practiceQuestion))
                     }
+                }
+                if task == .practiceHint { practiceHint = answer }
+                if task == .practiceFeedback {
+                    updatePracticeFeedback(.completed, persist: true)
                 }
                 record?.suggestions.append(.init(question: text, answer: answer, provider: connection.selection.provider))
                 responseIndex = (record?.suggestions.count ?? 1) - 1
@@ -438,10 +594,14 @@ final class LiveSession {
             } catch {
                 guard let self, answerID == id else { return }
                 answerError = error.localizedDescription
+                if task == .practiceFeedback {
+                    updatePracticeFeedback(.failed, error: error.localizedDescription, persist: true)
+                }
                 generating = false
                 answerWork = nil
             }
         }
+        return true
     }
 
     private func receiveAnswer(_ event: AnswerEvent, id: UUID) {
@@ -452,24 +612,36 @@ final class LiveSession {
                 timing?.firstToken = Date()
             }
             if answer.count < 25_000 { answer += token.prefix(25_000 - answer.count) }
+            if lastTask == .practiceFeedback { updatePracticeFeedback(.partial) }
         case .usage(let tokens): usage.merge(tokens)
         case .finished: break
         }
     }
 
+    private func updatePracticeFeedback(_ state: PracticeFeedbackState, error: String? = nil, persist: Bool = false) {
+        guard let feedbackAttemptID,
+              let position = record?.practiceAttempts?.firstIndex(where: { $0.id == feedbackAttemptID }) else { return }
+        record?.practiceAttempts?[position].feedback = answer
+        record?.practiceAttempts?[position].feedbackState = state
+        record?.practiceAttempts?[position].feedbackError = error
+        if state == .completed {
+            record?.practiceAttempts?[position].reviewTopic = PracticeAttempt.topic(in: answer)
+        }
+        if persist, options.save, phase != .ending, var snapshot = record {
+            snapshot.audioFiles = existingAudioFiles(snapshot.id)
+            do { try vault.save(snapshot) }
+            catch { answerError = "CueLens couldn’t save this practice attempt yet. It will retry when the session ends." }
+        }
+        scheduleCheckpoint()
+    }
+
     private func startSource(_ source: AudioSource) {
         guard phase == .active, !starting.contains(source), !activeSources.contains(source), let record else { return }
         let apiKey: String?
-        if settings.speechProvider == .openAI {
-            guard options.allowCloud else {
-                audioErrors[source] = ProviderError.cloudApprovalRequired.localizedDescription
-                return
-            }
-            guard let key = try? credentials.read(.openAI), !key.isEmpty else {
-                audioErrors[source] = ProviderError.credentialUnavailable.localizedDescription
-                return
-            }
-            apiKey = key
+        let speechProvider = speechProvider
+        if speechProvider == .openAI {
+            let key = try? credentials.read(.openAI)
+            apiKey = key?.isEmpty == false ? key : nil
         } else {
             apiKey = nil
         }
@@ -488,7 +660,7 @@ final class LiveSession {
             await priorStop?.value
             do {
                 try Task.checkCancellation()
-                try await input.start(microphoneID: settings.microphoneID, speechProvider: settings.speechProvider,
+                try await input.start(microphoneID: settings.microphoneID, speechProvider: speechProvider,
                                       locale: settings.speechLocale, apiKey: apiKey, recordingURL: url)
                 guard let self, audioIDs[source] == id, phase == .active else { await input.stop(); return }
                 starting.remove(source)
@@ -508,6 +680,9 @@ final class LiveSession {
         starting.remove(source)
         activeSources.remove(source)
         levels[source] = 0
+        clippedSources.remove(source)
+        transcribingSources.remove(source)
+        recordingSources.remove(source)
         if let text = partial.removeValue(forKey: source), retainPartial, !text.isEmpty, let started = record?.startedAt {
             append(.init(time: Date().timeIntervalSince(started), source: source, text: text, provisional: true))
         }
@@ -522,6 +697,18 @@ final class LiveSession {
 
     private func receiveAudio(_ event: AudioEvent, id: UUID) {
         switch event {
+        case .transcription(let source, let active):
+            guard audioIDs[source] == id else { return }
+            if active { transcribingSources.insert(source) }
+            else { transcribingSources.remove(source) }
+        case .recording(let source, let active):
+            guard audioIDs[source] == id else { return }
+            if active { recordingSources.insert(source) }
+            else { recordingSources.remove(source) }
+        case .clipping(let source, let clipped):
+            guard audioIDs[source] == id else { return }
+            if clipped { clippedSources.insert(source) }
+            else { clippedSources.remove(source) }
         case .level(let source, let level):
             if audioIDs[source] == id { levels[source] = level }
         case .partial(let source, let text):
@@ -540,8 +727,13 @@ final class LiveSession {
             let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !clean.isEmpty else { return }
             transcriptionDelay = max(0, Date().timeIntervalSince(ended))
+            if options.practice && source == .microphone {
+                practiceSpeech.append(.init(text: clean, began: began, ended: ended))
+            }
             append(.init(time: max(0, began.timeIntervalSince(started)), source: source, text: String(clean.prefix(6_000))))
-            guard automatic, !resourceCondition.reducesWork, options.allowCloud, canAnswer, phase == .active,
+            guard automatic, !generating, !capturing, captureImage == nil,
+                  composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !resourceCondition.reducesWork, canAnswer, phase == .active,
                   let detected = QuestionDetection.question(in: clean, source: source, locale: settings.speechLocale) else { return }
             let key = QuestionDetection.normalized(detected)
             if let (last, when) = lastAutomatic, last == key, Date().timeIntervalSince(when) < 25 { return }

@@ -35,16 +35,24 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
                 guard let self else { return }
                 switch command {
                 case .toggle: toggle()
-                case .answer, .controlAnswer:
-                    guard model.live.isOpen else { return }
-                    if model.live.composer.isEmpty { model.live.answerLatest() }
-                    else { model.live.askComposer() }
+                case .answer:
+                    guard model.live.isOpen, model.live.phase != .ending else { return }
+                    model.live.askComposer()
+                    show()
+                case .capture:
+                    guard model.live.isOpen, model.live.phase != .ending else { return }
+                    model.live.captureScreen()
+                    show()
                 case .emergency: model.live.emergencyStop(); hide()
                 }
             }
         }
         shortcutError = hotkeys?.register(preferences: preferences, live: model.live.isOpen)
     }
+
+    var showsBarOpacity: Bool { mode == .bar && model?.live.isOpen == false }
+
+    private var effectiveOpacity: Double { showsBarOpacity ? opacity : 1 }
 
     func toggle() {
         if visible { hide() }
@@ -71,8 +79,7 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
         let newValue = OverlayPreferences.clampedOpacity(value)
         guard newValue != opacity else { return }
         opacity = newValue
-        panel?.alphaValue = newValue
-        transcriptPanel?.alphaValue = newValue
+        panel?.alphaValue = effectiveOpacity
         opacitySave?.cancel()
         opacitySave = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(250))
@@ -110,7 +117,7 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
     }
 
     private func refreshAppearance() {
-        let theme = model?.workspace.overlay?.theme ?? .system
+        let theme = model?.workspace.overlay?.theme ?? .dark
         let appearance: NSAppearance?
         switch theme {
         case .system: appearance = nil
@@ -138,11 +145,10 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
         let left = source.minX - size.width - 9
         let x = left >= bounds.minX ? left : min(max(bounds.minX, source.maxX + 9), bounds.maxX - size.width)
         let y = max(bounds.minY, min(source.maxY - size.height, bounds.maxY - size.height))
-        let transcript = createPanel(title: "CueLens Pro Transcript", identifier: "cuelens.transcript")
+        let transcript = createPanel(title: "CueLens Transcript", identifier: "cuelens.transcript")
         transcript.appearance = appearance
         transcript.minSize = NSSize(width: 200, height: 220)
-        transcript.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: true)
-        transcript.alphaValue = opacity
+        transcript.setFrame(NSRect(origin: NSPoint(x: x, y: y), size: size), display: true, animate: false)
         transcript.contentView = NSHostingView(rootView: SeparateTranscriptPanel(model: model, controller: self)
             .ignoresSafeArea().tint(CueStyle.accent))
         transcriptPanel = transcript
@@ -156,9 +162,8 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
         }
         register()
         guard visible, mode != .test else { return }
-        if model?.live.isOpen != true {
-            display(.bar)
-        }
+        panel?.alphaValue = effectiveOpacity
+        if model?.live.isOpen != true { display(.bar) }
     }
 
     private func display(_ mode: Mode) {
@@ -188,8 +193,8 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
         let frame = NSRect(x: max(bounds.minX, min(bounds.maxX - size.width, x)),
                            y: max(bounds.minY, min(bounds.maxY - size.height, top - size.height)),
                            width: size.width, height: size.height)
-        window.setFrame(frame, display: true)
-        window.alphaValue = opacity
+        window.alphaValue = effectiveOpacity
+        window.setFrame(frame, display: true, animate: false)
         window.orderFrontRegardless()
         panel = window
         visible = true
@@ -197,7 +202,7 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
     }
 
     private func makeMainPanel() -> CuePanel {
-        let window = createPanel(title: "CueLens Pro Floating Panel", identifier: "cuelens.floating")
+        let window = createPanel(title: "CueLens Floating Panel", identifier: "cuelens.floating")
         if let model {
             let content = FloatingContent(model: model, controller: self).ignoresSafeArea().tint(CueStyle.accent)
             window.contentView = NSHostingView(rootView: content)
@@ -219,6 +224,7 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
         window.isFloatingPanel = true
         window.level = .floating
         window.hidesOnDeactivate = false
+        window.animationBehavior = .none
         window.isMovableByWindowBackground = true
         window.isOpaque = false
         window.backgroundColor = .clear
@@ -271,7 +277,7 @@ private struct FloatingContent: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .background(Color(nsColor: .windowBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
         }
     }
 
@@ -281,8 +287,11 @@ private struct FloatingContent: View {
             Image(systemName: "waveform.circle.fill")
                 .foregroundStyle(CueStyle.accent)
                 .accessibilityHidden(true)
-            Text("CueLens Pro").font(.headline)
+            Text("CueLens").font(.headline)
             Divider().frame(height: 18)
+            if let message = model.live.completionMessage, !model.live.isOpen {
+                Text(message).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
             Menu {
                 ForEach(model.activeAssistants) { assistant in
                     Button(assistant.name) { model.selectedAssistantID = assistant.id }
@@ -300,7 +309,7 @@ private struct FloatingContent: View {
             .menuStyle(.borderlessButton)
             Spacer(minLength: 0)
             if model.live.isOpen {
-                Button("End Session", systemImage: "stop.circle.fill") { model.live.end() }.labelStyle(.iconOnly)
+                Button("End Session", systemImage: "stop.circle.fill") { model.endSession() }.labelStyle(.iconOnly)
                     .help("End the session")
                     .disabled(model.live.phase == .ending)
                 if model.live.phase == .paused {
@@ -315,7 +324,7 @@ private struct FloatingContent: View {
             } else {
                 Button("Set Up Session", systemImage: "play.circle.fill") { model.openSessionSetup() }.labelStyle(.iconOnly)
             }
-            PanelOpacityControl(controller: controller, model: model)
+            PanelQuickSettings(controller: controller, model: model)
             Menu {
                 Button("CueLens Window") { model.openSessionSetup() }
                 Button("Floating Panel Settings") {
@@ -331,13 +340,19 @@ private struct FloatingContent: View {
         .buttonStyle(.borderless)
         .padding(.horizontal, 13)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.regularMaterial, in: Capsule())
+        .background {
+            if model.live.isOpen {
+                Capsule().fill(Color(nsColor: .windowBackgroundColor))
+            } else {
+                Capsule().fill(.regularMaterial)
+            }
+        }
         .overlay { Capsule().strokeBorder(.quaternary).allowsHitTesting(false) }
         .padding(3)
     }
 }
 
-struct PanelOpacityControl: View {
+struct PanelQuickSettings: View {
     let controller: FloatingWindow
     let model: AppModel
     @State private var showing = false
@@ -345,26 +360,35 @@ struct PanelOpacityControl: View {
     private var settings: OverlayPreferences { model.workspace.overlay ?? OverlayPreferences() }
 
     var body: some View {
-        Button("Quick Settings", systemImage: "circle.lefthalf.filled") { showing.toggle() }
+        Button("Quick Settings", systemImage: "slider.horizontal.3") { showing.toggle() }
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
-            .help("Opacity, appearance, and transcript settings")
-            .accessibilityIdentifier("panelOpacityButton")
+            .help("Adjust the floating panel")
+            .accessibilityIdentifier("panelQuickSettings")
             .popover(isPresented: $showing, arrowEdge: .bottom) {
                 VStack(alignment: .leading, spacing: 11) {
-                    HStack {
-                        Text("Opacity").font(.headline)
-                        Spacer()
-                        Text(controller.opacity.formatted(.percent.precision(.fractionLength(0)))).monospacedDigit()
+                    if controller.showsBarOpacity {
+                        HStack {
+                            Text("Idle bar opacity").font(.headline)
+                            Spacer()
+                            Text(controller.opacity.formatted(.percent.precision(.fractionLength(0)))).monospacedDigit()
+                        }
+                        Slider(value: Binding(get: { controller.opacity }, set: { controller.setOpacity($0) }),
+                               in: OverlayPreferences.opacityRange, step: 0.01) {
+                            Text("Idle bar opacity")
+                        }
+                        .labelsHidden()
+                        .accessibilityIdentifier("panelOpacitySlider")
                     }
-                    Slider(value: Binding(get: { controller.opacity }, set: { controller.setOpacity($0) }),
-                           in: OverlayPreferences.opacityRange, step: 0.01) {
-                        Text("Panel opacity")
+                    if model.live.isOpen {
+                        LabeledContent("Background", value: settings.liveBackgroundOpacity.formatted(.percent.precision(.fractionLength(0))))
+                        Slider(value: Binding(get: { settings.liveBackgroundOpacity }, set: { opacity in
+                            controller.updateQuickSettings { $0.backgroundOpacity = opacity }
+                        }), in: OverlayPreferences.opacityRange)
+                            .accessibilityLabel("Panel background opacity")
                     }
-                    .labelsHidden()
-                    .accessibilityIdentifier("panelOpacitySlider")
                     Picker("Appearance", selection: Binding(
-                        get: { settings.theme ?? .system }, set: { theme in controller.updateQuickSettings { $0.theme = theme } }
+                        get: { settings.theme ?? .dark }, set: { theme in controller.updateQuickSettings { $0.theme = theme } }
                     )) {
                         ForEach(PanelTheme.allCases) { Text($0.rawValue).tag($0) }
                     }.pickerStyle(.segmented)
@@ -386,8 +410,10 @@ struct PanelOpacityControl: View {
                         ForEach(ResponsePlacement.allCases) { Text($0.rawValue).tag($0) }
                     }
                     HStack {
-                        Button("Reset Opacity") { controller.setOpacity(OverlayPreferences().opacity) }
-                            .disabled(controller.opacity == OverlayPreferences().opacity)
+                        if controller.showsBarOpacity {
+                            Button("Reset Opacity") { controller.setOpacity(OverlayPreferences().opacity) }
+                                .disabled(controller.opacity == OverlayPreferences().opacity)
+                        }
                         Spacer()
                         Button("Done") { controller.saveOpacity(); showing = false }.keyboardShortcut(.defaultAction)
                     }
@@ -427,12 +453,22 @@ struct PanelDragGrip: NSViewRepresentable {
 }
 
 @MainActor
-private final class Hotkeys {
-    enum Command: UInt32 { case toggle = 1, answer, emergency, controlAnswer }
+final class Hotkeys {
+    enum Command: UInt32 { case toggle = 1, answer, emergency, capture }
+    private struct Configuration: Equatable {
+        let toggle: String
+        let emergency: String?
+        let live: Bool
+    }
     private var references = [EventHotKeyRef]()
     private var handler: EventHandlerRef?
+    private var localMonitor: Any?
     private let action: (Command) -> Void
     private let signature: OSType = 0x4375654c
+    private var configuration: Configuration?
+    private var registrationError: String?
+    private var lastCommand: Command?
+    private var lastDispatch = -Double.infinity
 
     init(action: @escaping (Command) -> Void) {
         self.action = action
@@ -444,12 +480,20 @@ private final class Hotkeys {
                                            nil, MemoryLayout<EventHotKeyID>.size, nil, &id)
             guard status == noErr, let command = Command(rawValue: id.id) else { return OSStatus(eventNotHandledErr) }
             let hotkeys = Unmanaged<Hotkeys>.fromOpaque(userData).takeUnretainedValue()
-            Task { @MainActor in hotkeys.action(command) }
+            guard id.signature == hotkeys.signature else { return OSStatus(eventNotHandledErr) }
+            Task { @MainActor in hotkeys.dispatch(command) }
             return noErr
         }, 1, &event, Unmanaged.passUnretained(self).toOpaque(), &handler)
     }
 
     func register(preferences: OverlayPreferences, live: Bool) -> String? {
+        let next = Configuration(toggle: preferences.shortcut, emergency: preferences.emergencyShortcut, live: live)
+        // Pause/resume and presentation changes must not repeatedly release the
+        // user's global shortcuts when their bindings have not changed.
+        if configuration == next, registrationError == nil { return nil }
+        configuration = next
+        if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+        localMonitor = nil
         for key in references { UnregisterEventHotKey(key) }
         references.removeAll()
         var failed = [String]()
@@ -458,10 +502,41 @@ private final class Hotkeys {
         if let stop = preferences.emergencyShortcut,
            !register(.emergency, code: Self.key(stop), modifiers: modifiers) { failed.append("emergency stop") }
         if live {
-            if !register(.answer, code: UInt32(kVK_Return), modifiers: UInt32(cmdKey)) { failed.append("⌘↩") }
-            if !register(.controlAnswer, code: UInt32(kVK_ANSI_N), modifiers: UInt32(controlKey)) { failed.append("⌃N") }
+            localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let command = Self.sessionCommand(keyCode: event.keyCode, modifiers: event.modifierFlags) else { return event }
+                // Consume repeats too, so holding the shortcut cannot reach an
+                // editor's Cut/Copy action while a session shortcut is active.
+                if !event.isARepeat { self?.dispatch(command) }
+                return nil
+            }
+            if !register(.answer, code: UInt32(kVK_ANSI_C), modifiers: UInt32(cmdKey)) { failed.append("⌘C") }
+            if !register(.capture, code: UInt32(kVK_ANSI_X), modifiers: UInt32(cmdKey)) { failed.append("⌘X") }
         }
-        return failed.isEmpty ? nil : "Another app may be using the \(failed.joined(separator: ", ")) shortcut."
+        registrationError = failed.isEmpty ? nil : "Another app may be using the \(failed.joined(separator: ", ")) shortcut."
+        return registrationError
+    }
+
+    static func sessionCommand(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Command? {
+        // Caps Lock and device-specific flags do not alter the requested chord.
+        guard modifiers.intersection([.command, .control, .option, .shift]) == .command else { return nil }
+        switch keyCode {
+        case UInt16(kVK_ANSI_C): return .answer
+        case UInt16(kVK_ANSI_X): return .capture
+        default: return nil
+        }
+    }
+
+    private func dispatch(_ command: Command) {
+        if command == .answer || command == .capture {
+            guard configuration?.live == true else { return }
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        // Carbon normally consumes the event before AppKit. Keep the foreground
+        // fallback from making a second request if both routes deliver one press.
+        guard command != lastCommand || now - lastDispatch > 0.12 else { return }
+        lastCommand = command
+        lastDispatch = now
+        action(command)
     }
 
     private func register(_ command: Command, code: UInt32?, modifiers: UInt32) -> Bool {
@@ -485,6 +560,7 @@ private final class Hotkeys {
     }
 
     deinit {
+        if let localMonitor { NSEvent.removeMonitor(localMonitor) }
         for key in references { UnregisterEventHotKey(key) }
         if let handler { RemoveEventHandler(handler) }
     }

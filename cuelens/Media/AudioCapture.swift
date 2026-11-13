@@ -10,6 +10,20 @@ struct Microphone: Identifiable, Equatable {
         AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone, .external], mediaType: .audio, position: .unspecified)
             .devices.map { Self(id: $0.uniqueID, name: $0.localizedName) }
     }
+
+    static var activeModeLabel: String {
+        switch AVCaptureDevice.activeMicrophoneMode {
+        case .voiceIsolation: "Voice Isolation"
+        case .wideSpectrum: "Wide Spectrum"
+        case .standard: "Standard"
+        @unknown default: "System managed"
+        }
+    }
+
+    @MainActor
+    static func showSystemModes() {
+        AVCaptureDevice.showSystemUserInterface(.microphoneModes)
+    }
 }
 
 enum AudioFailure: LocalizedError, Equatable {
@@ -164,16 +178,9 @@ final class MeetingAudioInput: AudioInput {
         accepting = true
         try check(AudioDeviceCreateIOProcIDWithBlock(&io, aggregate, ioQueue) { [weak self] _, input, _, _, _ in
             guard pending.wait(timeout: .now()) == .success else { return }
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, bufferListNoCopy: input, deallocator: nil),
-                  buffer.frameLength > 0,
-                  let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: buffer.frameLength) else {
+            guard let copy = AudioBufferCopy.copy(input, format: format) else {
                 pending.signal()
                 return
-            }
-            copy.frameLength = buffer.frameLength
-            for (source, target) in zip(UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList),
-                                        UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)) {
-                if let from = source.mData, let to = target.mData { memcpy(to, from, Int(min(source.mDataByteSize, target.mDataByteSize))) }
             }
             queue.async {
                 defer { pending.signal() }
@@ -229,5 +236,27 @@ final class MeetingAudioInput: AudioInput {
 
     private func check(_ status: OSStatus) throws {
         guard status == noErr else { throw AudioFailure.systemAudio(status) }
+    }
+}
+
+enum AudioBufferCopy {
+    /// Core Audio owns the callback buffers. The queued consumer must own a complete copy.
+    static func copy(_ input: UnsafePointer<AudioBufferList>, format: AVAudioFormat) -> AVAudioPCMBuffer? {
+        let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
+        let bytesPerFrame = format.streamDescription.pointee.mBytesPerFrame
+        let expectedCount = format.isInterleaved ? 1 : Int(format.channelCount)
+        guard bytesPerFrame > 0, buffers.count == expectedCount, let first = buffers.first,
+              first.mDataByteSize > 0, first.mDataByteSize % bytesPerFrame == 0 else { return nil }
+        let frames = first.mDataByteSize / bytesPerFrame
+        guard frames < 65_536, buffers.allSatisfy({ $0.mData != nil && $0.mDataByteSize == first.mDataByteSize }),
+              let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return nil }
+        copy.frameLength = frames
+        let destinations = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
+        for (source, target) in zip(buffers, destinations) {
+            guard let from = source.mData, let to = target.mData,
+                  source.mDataByteSize == target.mDataByteSize else { return nil }
+            memcpy(to, from, Int(source.mDataByteSize))
+        }
+        return copy
     }
 }

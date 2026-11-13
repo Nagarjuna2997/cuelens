@@ -136,10 +136,13 @@ struct Preferences: Codable, Equatable {
     var microphoneID: String?
     var backupProvider: AnswerProvider?
     var saveRawAudio: Bool?
+    var sessionMicrophone: Bool?
+    var sessionMeetingAudio: Bool?
 
     func answerSelection(for assistant: AssistantProfile) -> ProviderSelection {
         let provider = assistant.provider ?? answerProvider
-        return ProviderSelection(provider: provider, model: assistant.model.isEmpty ? model(for: provider) : assistant.model)
+        let override = assistant.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ProviderSelection(provider: provider, model: override.isEmpty ? model(for: provider) : override)
     }
 
     func model(for provider: AnswerProvider) -> String {
@@ -202,6 +205,8 @@ struct MeetingSession: Codable, Equatable, Identifiable {
     var sentAudioToCloud = false
     var sentTextToCloud = false
     var audioFiles: [String]?
+    var practiceAttempts: [PracticeAttempt]?
+    var practiceStyle: PracticeStyle?
 
     var duration: TimeInterval {
         if let endedAt { return max(0, endedAt.timeIntervalSince(startedAt)) }
@@ -217,4 +222,19 @@ struct SessionOptions: Equatable {
     var allowCloud = false
     var practice = false
     var saveAudio = false
+    var automaticAnswers = false
+    var screenContext = false
+    var previewCamera = false
+    var practiceStyle = PracticeStyle.behavioral
+    var practiceHints = true
+    var reviewTopic: String?
+}
+
+enum PracticeStyle: String, Codable, CaseIterable, Identifiable {
+    case behavioral = "Behavioral"
+    case technical = "Technical"
+    case coding = "Coding discussion"
+    case project = "Project deep dive"
+
+    var id: Self { self }
 }

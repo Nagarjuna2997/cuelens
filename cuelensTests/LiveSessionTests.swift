@@ -67,7 +67,7 @@ final class LiveSessionTests: XCTestCase {
     }
 
     @MainActor
-    func testCloudApprovalAndStaleAnswerCancellation() async throws {
+    func testManualAnswerAndStaleAnswerCancellation() async throws {
         let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let credentials = TestCredentials()
@@ -75,15 +75,7 @@ final class LiveSessionTests: XCTestCase {
         let streamer = FixtureAnswerStream()
         let live = LiveSession(vault: Vault(directory: root), credentials: credentials, streamer: streamer)
         let assistant = AssistantProfile(name: "Practice", background: "Built a build cache.", provider: .openAI)
-        live.start(assistant: assistant, settings: .init(), options: .init(microphone: false, save: false))
-        live.composer = "First question"
-        live.askComposer()
-        XCTAssertEqual(live.answerError, ProviderError.cloudApprovalRequired.localizedDescription)
-        let blocked = await streamer.count
-        XCTAssertEqual(blocked, 0)
-        live.end()
-        try await waitUntil { live.phase == .idle }
-        live.start(assistant: assistant, settings: .init(), options: .init(microphone: false, save: true, allowCloud: true))
+        live.start(assistant: assistant, settings: .init(), options: .init(microphone: false, save: true))
         live.composer = "First question"
         live.askComposer()
         try await waitUntil { live.answer == "Initial" }
@@ -92,7 +84,8 @@ final class LiveSessionTests: XCTestCase {
         try await waitUntil { live.answer == "Newest answer" && !live.generating }
         try await Task.sleep(for: .milliseconds(30))
         XCTAssertEqual(live.answer, "Newest answer")
-        XCTAssertEqual(live.record?.suggestions.map(\.question), ["Second question"])
+        XCTAssertEqual(live.record?.suggestions.map(\.question), ["First question", "Second question"])
+        XCTAssertTrue(live.record?.suggestions.first?.answer.contains("interrupted") == true)
         XCTAssertEqual(live.record?.sentTextToCloud, true)
         XCTAssertNotNil(live.timing?.firstTokenDelay)
         live.addNote("Typed note.")
@@ -101,6 +94,117 @@ final class LiveSessionTests: XCTestCase {
         let saved = try XCTUnwrap(Vault(directory: root).sessions().first)
         XCTAssertEqual(saved.transcript.first?.text, "Typed note.")
         XCTAssertNotNil(saved.endedAt)
+    }
+
+    @MainActor
+    func testLocalCaptureRequiresScreenOptInButNoAPIProvider() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = root.appending(path: "fixture.png")
+        let pixel = try XCTUnwrap(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aJt8AAAAASUVORK5CYII="))
+        try pixel.write(to: image)
+        let live = LiveSession(vault: Vault(directory: root), credentials: TestCredentials())
+        live.start(assistant: .init(name: "Capture"), settings: .init(), options: .init(microphone: false, save: false))
+        XCTAssertFalse(live.canCapture)
+        live.attachImage(image)
+        XCTAssertNotNil(live.captureError)
+        live.end()
+        try await waitUntil { live.phase == .idle }
+        live.start(assistant: .init(name: "Capture"), settings: .init(),
+                   options: .init(microphone: false, save: false, screenContext: true))
+        XCTAssertTrue(live.canCapture)
+        XCTAssertFalse(live.canAnswer)
+        live.attachImage(image)
+        try await waitUntil { !live.capturing }
+        XCTAssertNil(live.captureError)
+        XCTAssertNotNil(live.captureImage)
+        live.askComposer()
+        XCTAssertEqual(live.answerError, ProviderError.providerDisabled.localizedDescription)
+        XCTAssertNotNil(live.captureImage)
+        live.attachImage(image)
+        live.discardImage()
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertNil(live.captureImage)
+        XCTAssertFalse(live.capturing)
+        live.end()
+        try await waitUntil { live.phase == .idle }
+        XCTAssertEqual(live.completionMessage, "Session ended")
+    }
+
+    @MainActor
+    func testEndingRetainsStreamingAnswerAndCallsEndedAfterSaving() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let credentials = TestCredentials()
+        try credentials.write("fixture-only", for: .openAI)
+        let live = LiveSession(vault: Vault(directory: root), credentials: credentials, streamer: FixtureAnswerStream())
+        var ended = false
+        live.onEnded = {
+            XCTAssertEqual(live.phase, .idle)
+            ended = true
+        }
+        live.start(assistant: .init(name: "Saving", provider: .openAI), settings: .init(),
+                   options: .init(microphone: false, save: true))
+        live.composer = "First question"
+        live.askComposer()
+        try await waitUntil { live.answer == "Initial" }
+        live.end()
+        try await waitUntil { ended }
+        let saved = try XCTUnwrap(Vault(directory: root).sessions().first)
+        XCTAssertEqual(saved.suggestions.count, 1)
+        XCTAssertTrue(saved.suggestions[0].answer.hasPrefix("Initial"))
+        XCTAssertTrue(saved.suggestions[0].answer.contains("interrupted"))
+        XCTAssertEqual(live.completionMessage, "Saved to History")
+    }
+
+    @MainActor
+    func testCloudSpeechFallsBackLocallyAndPracticeFeedbackPersists() async throws {
+        let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let credentials = TestCredentials()
+        try credentials.write("fixture-only", for: .openAI)
+        let live = LiveSession(vault: Vault(directory: root), credentials: credentials, streamer: PracticeAnswerStream())
+        live.start(assistant: .init(name: "Practice", provider: .openAI), settings: .init(speechProvider: .openAI),
+                   options: .init(microphone: false, save: true, practice: true, practiceStyle: .technical))
+        XCTAssertEqual(live.speechProvider, .onDevice)
+        XCTAssertFalse(live.automatic)
+        try await waitUntil { !live.practiceQuestion.isEmpty && !live.generating }
+        live.composer = "I used a bounded retry queue."
+        live.askComposer()
+        try await waitUntil { live.practiceAttempts.first?.effectiveFeedbackState == .completed && !live.generating }
+        XCTAssertEqual(live.practiceAttempts[0].reviewTopic, "Retry policies")
+        XCTAssertNil(live.practiceMetrics?.wordsPerMinute)
+        live.schedulePracticeReview()
+        XCTAssertNotNil(live.practiceAttempts[0].nextReview)
+        let priorQuestion = live.practiceQuestion
+        live.retryPracticeAnswer()
+        XCTAssertEqual(live.practiceQuestion, priorQuestion)
+        XCTAssertEqual(live.answer, "")
+        XCTAssertEqual(live.practiceAttempts.count, 1)
+        live.end()
+        try await waitUntil { live.phase == .idle }
+        let saved = try XCTUnwrap(Vault(directory: root).sessions().first)
+        XCTAssertEqual(saved.practiceStyle, .technical)
+        XCTAssertEqual(saved.practiceAttempts?.count, 1)
+        XCTAssertNotNil(saved.practiceAttempts?.first?.nextReview)
+    }
+
+    func testPracticeDeliveryMetricsUseTimedSpeechOnly() {
+        let text = "Um I used retries. I used retries, you know."
+        let typed = PracticeMetrics.analyze(text: text)
+        XCTAssertEqual(typed.fillerCount, 2)
+        XCTAssertTrue(typed.repeatedPhrases.contains("i used retries"))
+        XCTAssertNil(typed.wordsPerMinute)
+        XCTAssertNil(typed.longPauseCount)
+        let start = Date()
+        let spoken = PracticeMetrics.analyze(text: text, speech: [
+            .init(text: "Um I used retries.", began: start, ended: start.addingTimeInterval(3)),
+            .init(text: "I used retries, you know.", began: start.addingTimeInterval(6), ended: start.addingTimeInterval(10))
+        ])
+        XCTAssertEqual(spoken.longPauseCount, 1)
+        XCTAssertEqual(spoken.wordsPerMinute, Double(spoken.wordCount) * 6)
+        XCTAssertEqual(spoken.spokenDuration, 10)
     }
 
     @MainActor
@@ -127,6 +231,18 @@ private actor FixtureAnswerStream: AnswerStreaming {
         } else {
             await emit(.text("Newest"))
             await emit(.text(" answer"))
+        }
+        await emit(.finished)
+    }
+}
+
+private struct PracticeAnswerStream: AnswerStreaming {
+    func stream(_ prompt: ProviderPrompt, connection: ProviderConnection,
+                emit: @escaping @Sendable (AnswerEvent) async -> Void) async throws {
+        if prompt.instructions.contains("mock interviewer") {
+            await emit(.text("How did you handle retries?"))
+        } else {
+            await emit(.text("Clarity: Your approach is specific.\nPractice topic: Retry policies"))
         }
         await emit(.finished)
     }

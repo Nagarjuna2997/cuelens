@@ -28,7 +28,7 @@ enum SessionExport {
 
             Assistant: \(markdown ? escape(session.assistantName) : session.assistantName)
             Started: \(date)\(status)
-            Duration: \(Int(session.duration.rounded(.down))) seconds
+            Duration: \(seconds(session.duration)) seconds
             Cloud processing: \(cloud.isEmpty ? "None recorded" : cloud.joined(separator: ", "))
 
             \(heading)Transcript
@@ -45,7 +45,31 @@ enum SessionExport {
         if !session.summary.isEmpty {
             result += "\n\(heading)Summary\n\n\(session.summary)\n"
         }
+        if let attempts = session.practiceAttempts, !attempts.isEmpty {
+            result += "\n\(heading)Practice review\n"
+            if let style = session.practiceStyle { result += "\nInterview: \(style.rawValue)\n" }
+            for attempt in attempts {
+                let question = markdown ? escape(attempt.question) : attempt.question
+                result += "\n\(markdown ? "### " : "")\(question)\n\nAnswer: \(attempt.response)\n\nFeedback: \(attempt.feedback)\n"
+                result += "\nWords: \(attempt.metrics.wordCount) · Fillers: \(attempt.metrics.fillerCount)"
+                if let pace = attempt.metrics.wordsPerMinute, pace.isFinite {
+                    result += String(format: " · Pace: %.0f words/min", pace)
+                }
+                if let pauses = attempt.metrics.longPauseCount { result += " · Long pauses: \(pauses)" }
+                result += "\nDelivery measurements are transcript-based estimates.\n"
+                if !attempt.metrics.repeatedPhrases.isEmpty {
+                    result += "Repeated phrases: \(attempt.metrics.repeatedPhrases.joined(separator: ", "))\n"
+                }
+                if let topic = attempt.reviewTopic { result += "Review topic: \(topic)\n" }
+                if let date = attempt.nextReview { result += "Review date: \(date.formatted(date: .abbreviated, time: .omitted))\n" }
+            }
+        }
         return result
+    }
+
+    private static func seconds(_ duration: TimeInterval) -> String {
+        guard duration.isFinite else { return "0" }
+        return String(format: "%.0f", max(0, duration).rounded(.down))
     }
 
     private static func escape(_ value: String) -> String {

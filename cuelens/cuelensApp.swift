@@ -8,9 +8,9 @@ struct CueLensApp: App {
     @State private var model = AppModel()
 
     var body: some Scene {
-        Window("CueLens Pro", id: "main") {
+        Window("CueLens", id: "main") {
             ContentView(model: model)
-                .frame(minWidth: 820, minHeight: 600)
+                .frame(minWidth: 1040, minHeight: 680)
                 .onAppear {
                     model.overlay.register()
                     let open = openWindow
@@ -21,12 +21,14 @@ struct CueLensApp: App {
                     model.overlay.hide()
                 }
         }
-        .defaultSize(width: 1080, height: 720)
+        .defaultSize(width: 1380, height: 820)
         .commands {
             CommandMenu("Session") {
                 Button("Show or Hide Floating Panel") { model.overlay.toggle() }
-                Button("Answer Latest Question") { model.live.answerLatest() }
+                Button("Answer · ⌘C") { model.live.askComposer() }
                     .disabled(!model.live.canAnswer)
+                Button("Capture Screen · ⌘X") { model.live.captureScreen() }.disabled(!model.live.canCapture)
+                Button("End Session") { model.endSession() }.disabled(!model.live.isOpen)
                 Divider()
                 Button("Stop Audio and Hide Panel") { model.live.emergencyStop(); model.overlay.hide() }
             }

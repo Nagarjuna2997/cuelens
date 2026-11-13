@@ -88,7 +88,9 @@ final class AppleSpeech: SpeechSink {
                 finish(turn, text: turn.partial)
             }
             turn.fallback = fallback
-            queue.asyncAfter(deadline: .now() + 0.85, execute: fallback)
+            // A cold on-device recognizer may produce its first result after the VAD ends.
+            let allowance = turn.partial.isEmpty ? 3.0 : 0.85
+            queue.asyncAfter(deadline: .now() + allowance, execute: fallback)
         }
     }
 
@@ -118,7 +120,13 @@ final class AppleSpeech: SpeechSink {
     }
 
     private func finish(_ turn: Turn, text: String) {
-        if active?.id == turn.id { active = nil }
+        guard active?.id == turn.id || finishing[turn.id] != nil else { return }
+        if active?.id == turn.id {
+            active = nil
+            // Recognition may finalize before the next silence. Restart segmentation for
+            // the next utterance instead of feeding an already-completed request.
+            vad = VoiceActivity()
+        }
         finishing.removeValue(forKey: turn.id)
         turn.fallback?.cancel()
         turn.task?.cancel()

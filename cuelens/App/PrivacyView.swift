@@ -18,7 +18,7 @@ struct PrivacyView: View {
                     } minimumValueLabel: { Text("12") } maximumValueLabel: { Text("26") }
                     Slider(value: Binding(get: { model.overlay.opacity }, set: { model.overlay.setOpacity($0) }),
                            in: OverlayPreferences.opacityRange, step: 0.01) {
-                        Text("Opacity")
+                        Text("Idle bar opacity")
                     } minimumValueLabel: { Text("55%") } maximumValueLabel: { Text("100%") }
                     Toggle("Use compact session window size", isOn: $settings.compact)
                     Picker("Show or hide (⌘⌥)", selection: $settings.shortcut) {

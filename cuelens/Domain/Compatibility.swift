@@ -1,6 +1,13 @@
 import Foundation
 
 struct OverlayPreferences: Codable, Equatable {
+    static let opacityRange = 0.55...1.0
+
+    static func clampedOpacity(_ value: Double) -> Double {
+        guard value.isFinite else { return 1 }
+        return min(max(value, opacityRange.lowerBound), opacityRange.upperBound)
+    }
+
     var fontSize = 16.0
     var opacity = 1.0
     var compact = true

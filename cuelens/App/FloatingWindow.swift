@@ -13,11 +13,14 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
     private(set) var visible = false
     private var expandedSize: NSSize?
     private(set) var shortcutError: String?
+    private(set) var opacity = 1.0
+    @ObservationIgnored private var opacitySave: Task<Void, Never>?
     @ObservationIgnored private var hotkeys: Hotkeys?
 
     init(model: AppModel) {
         self.model = model
         super.init()
+        opacity = OverlayPreferences.clampedOpacity(model.workspace.overlay?.opacity ?? 1)
         model.live.onStateChanged = { [weak self] in self?.sessionChanged() }
     }
 
@@ -52,17 +55,37 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
     func showTest() { display(.test) }
 
     func hide() {
+        saveOpacity()
         if mode == .session { expandedSize = panel?.frame.size }
         panel?.orderOut(nil)
         visible = false
     }
 
+    func setOpacity(_ value: Double) {
+        let newValue = OverlayPreferences.clampedOpacity(value)
+        guard newValue != opacity else { return }
+        opacity = newValue
+        panel?.alphaValue = newValue
+        opacitySave?.cancel()
+        opacitySave = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            if !Task.isCancelled { self?.saveOpacity() }
+        }
+    }
+
+    func saveOpacity() {
+        opacitySave?.cancel()
+        opacitySave = nil
+        guard let model else { return }
+        var settings = model.workspace.overlay ?? OverlayPreferences()
+        guard settings.opacity != opacity else { return }
+        settings.opacity = opacity
+        _ = model.update { $0.overlay = settings }
+    }
+
     func applyPreferences() {
         register()
-        if let model {
-            panel?.alphaValue = model.workspace.overlay?.opacity ?? 1
-            expandedSize = nil
-        }
+        expandedSize = nil
     }
 
     private func sessionChanged() {
@@ -103,7 +126,7 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
                            y: max(bounds.minY, min(bounds.maxY - size.height, top - size.height)),
                            width: size.width, height: size.height)
         window.setFrame(frame, display: true)
-        window.alphaValue = settings.opacity
+        window.alphaValue = opacity
         window.orderFrontRegardless()
         panel = window
         visible = true
@@ -157,7 +180,8 @@ private struct FloatingContent: View {
             bar
         case .session:
             SessionWorkspace(live: model.live, floating: true, overlay: model.workspace.overlay ?? OverlayPreferences(),
-                             onMain: { model.openSessionSetup() }, onCompact: { controller.compact() }, onHide: { controller.hide() })
+                             onMain: { model.openSessionSetup() }, onCompact: { controller.compact() }, onHide: { controller.hide() },
+                             opacityController: controller)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary).allowsHitTesting(false) }
         case .test:
@@ -213,6 +237,7 @@ private struct FloatingContent: View {
             } else {
                 Button("Set Up Session", systemImage: "play.circle.fill") { model.openSessionSetup() }.labelStyle(.iconOnly)
             }
+            PanelOpacityControl(controller: controller)
             Menu {
                 Button("CueLens Window") { model.openSessionSetup() }
                 Button("Floating Panel Settings") {
@@ -231,6 +256,43 @@ private struct FloatingContent: View {
         .background(.regularMaterial, in: Capsule())
         .overlay { Capsule().strokeBorder(.quaternary).allowsHitTesting(false) }
         .padding(3)
+    }
+}
+
+struct PanelOpacityControl: View {
+    let controller: FloatingWindow
+    @State private var showing = false
+
+    var body: some View {
+        Button("Panel Opacity", systemImage: "circle.lefthalf.filled") { showing.toggle() }
+            .labelStyle(.iconOnly)
+            .buttonStyle(.borderless)
+            .help("Adjust the floating panel’s opacity")
+            .accessibilityIdentifier("panelOpacityButton")
+            .popover(isPresented: $showing, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Panel opacity").font(.headline)
+                        Spacer()
+                        Text(controller.opacity.formatted(.percent.precision(.fractionLength(0))))
+                            .monospacedDigit()
+                    }
+                    Slider(value: Binding(get: { controller.opacity }, set: { controller.setOpacity($0) }),
+                           in: OverlayPreferences.opacityRange, step: 0.01) {
+                        Text("Panel opacity")
+                    }
+                    .labelsHidden()
+                    .accessibilityIdentifier("panelOpacitySlider")
+                    HStack {
+                        Button("Reset") { controller.setOpacity(1) }.disabled(controller.opacity == 1)
+                        Spacer()
+                        Button("Done") { controller.saveOpacity(); showing = false }.keyboardShortcut(.defaultAction)
+                    }
+                }
+                .padding(14)
+                .frame(width: 235)
+                .onDisappear { controller.saveOpacity() }
+            }
     }
 }
 

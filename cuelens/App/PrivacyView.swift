@@ -16,7 +16,8 @@ struct PrivacyView: View {
                     Slider(value: $settings.fontSize, in: 12...26, step: 1) {
                         Text("Answer text size")
                     } minimumValueLabel: { Text("12") } maximumValueLabel: { Text("26") }
-                    Slider(value: $settings.opacity, in: 0.55...1, step: 0.05) {
+                    Slider(value: Binding(get: { model.overlay.opacity }, set: { model.overlay.setOpacity($0) }),
+                           in: OverlayPreferences.opacityRange, step: 0.01) {
                         Text("Opacity")
                     } minimumValueLabel: { Text("55%") } maximumValueLabel: { Text("100%") }
                     Toggle("Use compact session window size", isOn: $settings.compact)
@@ -76,6 +77,7 @@ struct PrivacyView: View {
             .formStyle(.grouped)
         }
         .onAppear { settings = model.workspace.overlay ?? OverlayPreferences() }
+        .onDisappear { model.overlay.saveOpacity() }
     }
 
     private func saveSettings() {
@@ -83,6 +85,7 @@ struct PrivacyView: View {
             status = "Choose a different letter for each shortcut."
             return
         }
+        settings.opacity = model.overlay.opacity
         if model.update({ $0.overlay = settings }) {
             model.overlay.applyPreferences()
             status = "Settings applied."

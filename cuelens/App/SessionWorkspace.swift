@@ -9,6 +9,7 @@ struct SessionWorkspace: View {
     var onMain: (() -> Void)?
     var onCompact: (() -> Void)?
     var onHide: (() -> Void)?
+    var opacityController: FloatingWindow?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,6 +62,7 @@ struct SessionWorkspace: View {
             if let onCompact {
                 Button("Compact Bar", systemImage: "rectangle.compress.vertical") { onCompact() }.labelStyle(.iconOnly)
             }
+            if let opacityController { PanelOpacityControl(controller: opacityController) }
             if let onHide {
                 Button("Hide Panel", systemImage: "eye.slash") { onHide() }.labelStyle(.iconOnly)
             }

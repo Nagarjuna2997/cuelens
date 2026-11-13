@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ProvidersView: View {
@@ -15,15 +16,35 @@ struct ProvidersView: View {
                 .padding([.top, .horizontal], 30)
                 .padding(.bottom, 12)
             Form {
-                Section("Speech to text") {
-                    Picker("Speech provider", selection: $draft.speechProvider) {
-                        ForEach(SpeechProvider.allCases) { Text($0.rawValue).tag($0) }
+                Section("API connection") {
+                    Picker("Configure", selection: $provider) {
+                        ForEach(AnswerProvider.cloudProviders) { Text($0.rawValue).tag($0) }
                     }
-                    TextField("Speech locale", text: $draft.speechLocale, prompt: Text("en-US"))
-                    Text(draft.speechProvider == .onDevice
-                         ? "Speech is processed on this Mac when Apple supports the selected locale."
-                         : "With session approval, OpenAI Realtime receives the selected audio. Set up your OpenAI API key below.")
-                        .foregroundStyle(.secondary)
+                    .disabled(work != nil)
+                    if let credential = provider.credential {
+                        HStack {
+                            SecureField(credential.name, text: $key, prompt: Text(hasKey ? "Saved in Keychain" : "Paste your API key"))
+                                .accessibilityIdentifier("providerKey")
+                            Button("Paste API Key", systemImage: "clipboard") { pasteKey() }
+                                .accessibilityIdentifier("pasteProviderKey")
+                        }
+                        .disabled(work != nil)
+                        TextField("Model ID", text: Binding(
+                            get: { draft.model(for: provider) },
+                            set: { draft.setModel($0, for: provider) }
+                        ))
+                        HStack {
+                            if let url = provider.keyURL { Link("Get API Key", destination: url) }
+                            Spacer()
+                            if hasKey {
+                                Button("Remove Key", role: .destructive) { remove(credential) }.disabled(work != nil)
+                            }
+                            Button("Test Connection") { test() }.disabled(work != nil)
+                        }
+                        Text("Test Connection sends a short sample prompt. Save Settings stores the key in macOS Keychain.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Section("Answers") {
                     Picker("Default provider", selection: $draft.answerProvider) {
@@ -36,30 +57,15 @@ struct ProvidersView: View {
                     Text("With session approval, your selected provider receives the question, recent transcript, and relevant assistant material. API billing and access are managed by each provider.")
                         .foregroundStyle(.secondary)
                 }
-                Section("API connection") {
-                    Picker("Configure", selection: $provider) {
-                        ForEach(AnswerProvider.cloudProviders) { Text($0.rawValue).tag($0) }
+                Section("Speech to text") {
+                    Picker("Speech provider", selection: $draft.speechProvider) {
+                        ForEach(SpeechProvider.allCases) { Text($0.rawValue).tag($0) }
                     }
-                    .disabled(work != nil)
-                    TextField("Model ID", text: Binding(
-                        get: { draft.model(for: provider) },
-                        set: { draft.setModel($0, for: provider) }
-                    ))
-                    if let credential = provider.credential {
-                        SecureField(credential.name, text: $key, prompt: Text(hasKey ? "Saved in Keychain" : "Paste API key"))
-                            .disabled(work != nil)
-                        HStack {
-                            if let url = provider.keyURL { Link("Get API Key", destination: url) }
-                            Spacer()
-                            if hasKey {
-                                Button("Remove Key", role: .destructive) { remove(credential) }.disabled(work != nil)
-                            }
-                            Button("Test Connection") { test() }.disabled(work != nil)
-                        }
-                        Text("Connection tests send a short, generic prompt and may use API credits. Save settings to keep the selected models and provider.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    }
+                    TextField("Speech locale", text: $draft.speechLocale, prompt: Text("en-US"))
+                    Text(draft.speechProvider == .onDevice
+                         ? "Speech is processed on this Mac when Apple supports the selected locale."
+                         : "With session approval, OpenAI Realtime receives the selected audio. Configure an OpenAI API key to use it.")
+                        .foregroundStyle(.secondary)
                 }
                 Section("Resources") {
                     Picker("Preset", selection: $draft.resourcePreset) {
@@ -95,6 +101,20 @@ struct ProvidersView: View {
             work = nil
             key = ""
         }
+    }
+
+    private func pasteKey() {
+        guard let value = NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            status = "Copy your API key first, then click Paste API Key."
+            return
+        }
+        guard !value.contains(where: \.isNewline) else {
+            status = "Copy only the API key, then try again."
+            return
+        }
+        key = value
+        status = "Key pasted. Test Connection or Save Settings."
     }
 
     private func refreshKey() {
@@ -135,7 +155,8 @@ struct ProvidersView: View {
                 let connection = try ProviderConnection(selection: selection, credentials: credentials)
                 try await HTTPAnswerStream().stream(.connectionTest, connection: connection) { _ in }
                 try Task.checkCancellation()
-                status = "\(selection.provider.shortName) streamed a response successfully."
+                if draft.answerProvider == .disabled { draft.answerProvider = selection.provider }
+                status = "\(selection.provider.shortName) streamed a response. Click Save Settings to use this connection."
             } catch {
                 if !Task.isCancelled { status = error.localizedDescription }
             }

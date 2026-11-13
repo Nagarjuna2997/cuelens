@@ -29,7 +29,7 @@ struct PrivacyView: View {
                         ForEach(Array("abcdefghijklmnopqrstuvwxyz").map(String.init), id: \.self) { Text($0.uppercased()).tag(Optional($0)) }
                     }
                     HStack {
-                        Button("Show Floating Bar") { model.overlay.show() }
+                        Button("Show Floating Bar") { model.overlay.showBar() }
                         Spacer()
                         Button("Apply") { saveSettings() }
                     }
@@ -85,8 +85,15 @@ struct PrivacyView: View {
             status = "Choose a different letter for each shortcut."
             return
         }
-        settings.opacity = model.overlay.opacity
-        if model.update({ $0.overlay = settings }) {
+        if model.update({ workspace in
+            var saved = workspace.overlay ?? OverlayPreferences()
+            saved.opacity = model.overlay.opacity
+            saved.fontSize = settings.fontSize
+            saved.compact = settings.compact
+            saved.shortcut = settings.shortcut
+            saved.emergencyShortcut = settings.emergencyShortcut
+            workspace.overlay = saved
+        }) {
             model.overlay.applyPreferences()
             status = "Settings applied."
         }

@@ -89,6 +89,12 @@ struct KnowledgeFile: Codable, Equatable, Identifiable {
     var kind: MaterialKind?
 }
 
+struct CustomResponse: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var name = ""
+    var instructions = ""
+}
+
 struct AssistantProfile: Codable, Equatable, Identifiable {
     var id = UUID()
     var name = ""
@@ -109,6 +115,7 @@ struct AssistantProfile: Codable, Equatable, Identifiable {
     var liveSuggestions = true
     var retainSession = true
     var archived = false
+    var customResponses: [CustomResponse]?
 
     func duplicate() -> Self {
         var copy = self
@@ -178,6 +185,7 @@ struct Suggestion: Codable, Equatable, Identifiable {
     var question: String
     var answer: String
     var provider: AnswerProvider
+    var pinned: Bool?
 }
 
 struct MeetingSession: Codable, Equatable, Identifiable {

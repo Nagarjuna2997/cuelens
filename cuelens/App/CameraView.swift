@@ -53,14 +53,26 @@ struct CameraView: View {
                 }
                 CueCard {
                     Toggle("Show eye tracking landmarks", isOn: $preview.tracking)
-                    Toggle("Try eye-contact correction", isOn: $preview.correction)
+                    Toggle("Eye Contact (Experimental)", isOn: $preview.correction)
                     if preview.correction {
                         Slider(value: $preview.strength, in: 0...1, step: 0.05) {
                             Text("Correction strength")
                         } minimumValueLabel: { Text("0%") } maximumValueLabel: { Text("100%") }
                         Toggle("Compare with original", isOn: $compare)
+                        HStack {
+                            Button("Calibrate Camera Look") { preview.calibrate(reading: false) }
+                                .disabled(!preview.active || preview.calibrating || preview.lowResources)
+                            Button("Calibrate Reading Position") { preview.calibrate(reading: true) }
+                                .disabled(!preview.active || preview.calibration == nil || preview.calibrating || preview.lowResources)
+                            if preview.calibration != nil {
+                                Button("Reset") { preview.resetCalibration() }.disabled(preview.calibrating)
+                            }
+                        }
+                        if !preview.calibrationMessage.isEmpty {
+                            Text(preview.calibrationMessage).font(.callout).foregroundStyle(.secondary)
+                        }
                     }
-                    Text("Experimental correction gently shifts detected pupils when the face is nearly front-on. Blinks, side angles, uncertain landmarks, and resource pressure use the original feed.")
+                    Text("Calibrate while looking at the camera, then look at your reading spot. CueLens Pro redirects small glances toward the calibrated target. Larger movements, uncertain landmarks, and resource pressure use the original feed.")
                         .foregroundStyle(.secondary)
                     Text("Camera processing stays on this Mac.")
                         .foregroundStyle(.secondary)

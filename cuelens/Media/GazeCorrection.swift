@@ -2,12 +2,16 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import Vision
 
-/// A small local pupil-centering warp. Frames with uncertain landmarks use the original feed.
+/// Blends a bounded, calibrated shift of the original eye pixels. Uncertain landmarks leave the frame unchanged.
 final class GazeCorrection {
     struct Eye {
         let center: CGPoint
         let pupil: CGPoint
         let radius: CGSize
+
+        var aim: CGPoint {
+            CGPoint(x: (pupil.x - center.x) / radius.width, y: (pupil.y - center.y) / radius.height)
+        }
     }
 
     private let request = VNDetectFaceLandmarksRequest()
@@ -16,9 +20,9 @@ final class GazeCorrection {
         guard (try? handler.perform([request])) != nil,
               let results = request.results, results.count == 1, let face = results.first,
               face.confidence > 0.8,
-              abs(face.yaw?.doubleValue ?? 0) < 0.35,
-              abs(face.roll?.doubleValue ?? 0) < 0.30,
-              abs(face.pitch?.doubleValue ?? 0) < 0.30,
+              abs(face.yaw?.doubleValue ?? 0) < 0.43,
+              abs(face.roll?.doubleValue ?? 0) < 0.32,
+              abs(face.pitch?.doubleValue ?? 0) < 0.42,
               let landmarks = face.landmarks else { return [] }
         let size = CGSize(width: CVPixelBufferGetWidth(buffer), height: CVPixelBufferGetHeight(buffer))
         let left = Self.eye(outline: landmarks.leftEye, pupil: landmarks.leftPupil, face: face.boundingBox, size: size)
@@ -27,14 +31,20 @@ final class GazeCorrection {
         return [left, right]
     }
 
-    func apply(to image: CIImage, eyes: [Eye], strength: Double) -> CIImage? {
+    func apply(to image: CIImage, eyes: [Eye], strength: Double, target: EyeAim? = nil,
+               observed: EyeAim? = nil) -> CIImage? {
         guard eyes.count == 2, strength.isFinite, strength > 0 else { return nil }
         let strength = min(strength, 1)
+        let targets = target.map { [$0.left, $0.right] } ?? [.zero, .zero]
+        let readings = observed.map { [$0.left, $0.right] } ?? eyes.map(\.aim)
         var corrected = image
-        for eye in eyes {
+        for (index, eye) in eyes.enumerated() {
             guard eye.radius.width > 0, eye.radius.height > 0 else { return nil }
-            let x = Self.clamp((eye.center.x - eye.pupil.x) * strength, to: min(eye.radius.width * 0.23, 4))
-            let y = Self.clamp((eye.center.y - eye.pupil.y) * strength, to: min(eye.radius.height * 0.28, 2.5))
+            let lens = targets[index]
+            let reading = readings[index]
+            let x = Self.clamp((lens.x - reading.x) * eye.radius.width * strength, to: min(eye.radius.width * 0.34, 7))
+            let y = Self.clamp((lens.y - reading.y) * eye.radius.height * strength, to: min(eye.radius.height * 0.48, 4))
+            if abs(x) + abs(y) < 0.08 { continue }
             let gradient = CIFilter.radialGradient()
             gradient.center = .zero
             gradient.radius0 = 0.22

@@ -9,10 +9,35 @@ struct OverlayPreferences: Codable, Equatable {
     }
 
     var fontSize = 16.0
-    var opacity = 1.0
+    var opacity = 0.85
     var compact = true
     var shortcut = "h"
     var emergencyShortcut: String? = "x"
+    var theme: PanelTheme?
+    var transcriptLayout: TranscriptLayout?
+    var responsePlacement: ResponsePlacement?
+}
+
+enum PanelTheme: String, Codable, CaseIterable, Identifiable {
+    case system = "System"
+    case light = "Light"
+    case dark = "Dark"
+
+    var id: Self { self }
+}
+
+enum TranscriptLayout: String, Codable, CaseIterable, Identifiable {
+    case docked = "Docked"
+    case floating = "Floating"
+
+    var id: Self { self }
+}
+
+enum ResponsePlacement: String, Codable, CaseIterable, Identifiable {
+    case transcript = "With transcript"
+    case answers = "With responses"
+
+    var id: Self { self }
 }
 
 enum ShareMode: String, Codable, CaseIterable, Identifiable {

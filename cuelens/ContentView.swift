@@ -12,7 +12,7 @@ struct ContentView: View {
                         Label(section.rawValue, systemImage: section.icon).tag(section)
                     }
                 } header: {
-                    Label("CueLens", systemImage: "waveform.circle.fill")
+                    Label("CueLens Pro", systemImage: "waveform.circle.fill")
                         .font(.headline)
                         .foregroundStyle(.primary)
                         .padding(.vertical, 10)
@@ -57,7 +57,7 @@ struct ContentView: View {
         .sheet(item: $editing) { profile in
             AssistantEditor(profile: profile, model: model)
         }
-        .alert("CueLens", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
+        .alert("CueLens Pro", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
             Button("OK", role: .cancel) { model.error = nil }
         } message: {
             Text(model.error ?? "")
@@ -197,6 +197,7 @@ struct AssistantsView: View {
     let edit: (AssistantProfile) -> Void
     @State private var deleting: AssistantProfile?
     @State private var showArchived = false
+    @State private var query = ""
 
     var body: some View {
         ScrollView {
@@ -207,11 +208,14 @@ struct AssistantsView: View {
                         .buttonStyle(.borderedProminent)
                         .accessibilityIdentifier("newAssistant")
                 }
+                if !model.assistants.isEmpty {
+                    TextField("Search assistants", text: $query).textFieldStyle(.roundedBorder)
+                }
                 if model.assistants.contains(where: \.archived) {
                     Toggle("Show archived", isOn: $showArchived).toggleStyle(.switch)
                 }
                 if visible.isEmpty {
-                    ContentUnavailableView("No assistants yet", systemImage: "person.crop.rectangle", description:
+                    ContentUnavailableView(query.isEmpty ? "No assistants yet" : "No matching assistants", systemImage: "person.crop.rectangle", description:
                                             Text("Create an assistant to add your own background and preferences."))
                 }
                 ForEach(visible) { assistant in
@@ -222,9 +226,20 @@ struct AssistantsView: View {
                                 let role = [assistant.jobTitle, assistant.company].filter { !$0.isEmpty }.joined(separator: " · ")
                                 Text(role.isEmpty ? assistant.kind.rawValue : role)
                                     .foregroundStyle(.secondary)
+                                if let resume = assistant.knowledge.first(where: { $0.kind == .resume }) {
+                                    Label(resume.name, systemImage: "doc.text").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                } else if assistant.kind == .interview || assistant.kind == .mockInterview {
+                                    Text("Add a résumé in Edit").font(.caption).foregroundStyle(.secondary)
+                                }
                             }
                             Spacer()
                             if assistant.archived { Text("Archived").foregroundStyle(.secondary) }
+                            if !assistant.archived {
+                                Button("Launch") {
+                                    model.selectedAssistantID = assistant.id
+                                    model.selection = .session
+                                }
+                            }
                             Button("Edit") { edit(assistant) }
                             Menu {
                                 Button("Duplicate") { edit(assistant.duplicate()) }
@@ -259,7 +274,9 @@ struct AssistantsView: View {
     }
 
     private var visible: [AssistantProfile] {
-        (showArchived ? model.assistants : model.activeAssistants).sorted {
+        (showArchived ? model.assistants : model.activeAssistants).filter {
+            query.isEmpty || $0.name.localizedStandardContains(query) || $0.jobTitle.localizedStandardContains(query)
+        }.sorted {
             $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
     }

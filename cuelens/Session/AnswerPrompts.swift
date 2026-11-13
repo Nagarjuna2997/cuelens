@@ -2,6 +2,7 @@ import Foundation
 
 enum AnswerTask: Equatable {
     case suggestion, technical, capture, practiceQuestion, practiceFeedback, summary
+    case responseType(AnswerFormat), custom(CustomResponse)
 }
 
 struct AnswerTiming {
@@ -48,13 +49,20 @@ enum AnswerPrompts {
             """
         let direction: String
         switch task {
-        case .suggestion, .technical:
-            let format = task == .technical ? AnswerFormat.technical : assistant.format
+        case .suggestion, .technical, .responseType:
+            let format: AnswerFormat
+            switch task {
+            case .technical: format = .technical
+            case .responseType(let override): format = override
+            default: format = assistant.format
+            }
             direction = """
                 Start immediately with one natural, complete sentence the user can say.
                 \(formatInstruction(format))
                 \(lengthInstruction(length))
                 """
+        case .custom(let response):
+            direction = "Start with a direct response. Apply this user-authored response format: \(response.instructions.prefix(800)). \(lengthInstruction(length))"
         case .capture:
             direction = """
                 Use the selected image if supplied. Identify the problem and state the approach in the first two sentences.

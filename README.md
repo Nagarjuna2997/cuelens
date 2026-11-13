@@ -1,30 +1,35 @@
-# CueLens
+# CueLens Pro
 
-CueLens is a native macOS app for meeting notes, interview practice, and live answers. It pairs selected assistant materials with a transcript and streams answers from your choice of OpenAI, Claude, or Gemini.
+CueLens Pro is a native Mac app for meeting notes, interview practice, and live assistance. Each assistant has its own résumé, job description, materials, and response types. The floating session displays the live transcript beside streamed answers from OpenAI, Claude, or Gemini.
 
-## Build and run
+## Install
 
-Open `cuelens.xcodeproj` in Xcode 27.2 and run the `cuelens` scheme, or build for local testing:
+On the development Mac, open **CueLens Pro** from your user Applications folder. To build from source, open `cuelens.xcodeproj` in Xcode 27.2 and run the `cuelens` scheme.
 
 ```sh
-xcodebuild -project cuelens.xcodeproj -scheme cuelens -configuration Debug \
-  -destination 'platform=macOS' -derivedDataPath build/DerivedData \
-  CODE_SIGN_IDENTITY=- build
-open build/DerivedData/Build/Products/Debug/cuelens.app
+git clone https://github.com/Nagarjuna2997/cuelens.git
+cd cuelens
+scripts/package.sh
 ```
 
-CueLens targets macOS 14.2 and later. This development milestone builds and runs on Apple Silicon. A device matrix and distribution instructions will be added with release validation.
+The script writes a universal app and ZIP to `build/distribution/0.2.0`. This is a local development build. See [distribution and camera signing](docs/distribution.md) for Developer ID, notarization, and the optional camera extension. The app targets macOS 14.2 or later. Hardware validation so far used an Apple M4 MacBook Air running macOS 27.0.1.
 
-## Start a session
+## Quick start
 
-1. Create an assistant and add your role, experience, and optional PDF, DOCX, TXT, or Markdown material. Review the extracted text before saving.
-2. In **Providers**, select Apple on-device speech or OpenAI Realtime. Choose one of the three answer providers, enter your API key, test the connection, and save.
-3. In **Live Session**, select the assistant and audio sources, run **Test Audio Sources**, then review retention and cloud processing. Start only after obtaining any required consent.
-4. Ask a question, press **⌘↩** to answer the latest meeting question, or select a single window or an image with **Capture**. Review a capture before sending it. Use capture assistance only when the meeting or assessment permits it.
-5. Drag the floating panel by its grip. The default **⌘⌥H** shows or hides it. **⌘⌥X** stops audio, cancels the current request, and hides the panel.
+1. In **Assistants → New Assistant**, name the role and use **Upload Résumé**, **Attach Job Description**, and **Add Material**. Review extracted text. Use **Save & Launch** to open the session setup.
+2. In **Providers → API connection**, choose OpenAI, Claude, or Gemini. Copy the provider’s API key and click **Paste API Key**. Click **Test Connection**, choose the **Default provider**, and **Save Settings**. Keys are saved in macOS Keychain. Direct account sign-in is deferred.
+3. In **Live Session**, select your assistant, enable **Meeting audio from this Mac**, and optionally enable **Microphone** for your own voice. Run **Test Audio Sources** and review cloud and retention choices before starting.
+4. Switch to your meeting app. Drag the floating panel by its grip. Use **Minimize** at the far right of the response toolbar, then **Restore** on the compact bar. **Quick Settings** controls opacity, theme, text size, and transcript layout.
+5. Use **⌘↩**, **⌃N**, or **What should I say next?** for the latest question. Type a question or use the camera icon to select a coding window or image. Review the image before sending it.
+6. End the session from the compact bar or the session menu. Use **History** for transcript corrections, summaries, and exports.
 
-Apple on-device speech keeps audio on the Mac for supported locales. OpenAI Realtime sends enabled audio sources to OpenAI after session approval. Cloud answer requests can include selected document excerpts, recent transcript, and a reviewed image. API keys are stored in Keychain. The app saves transcript and raw audio locally according to session options.
+Read the [full user guide](docs/guide.md) for the exact clicks and permission settings. Use CueLens Pro with any required participant consent and follow the meeting or assessment rules.
 
-The floating panel can appear in screen sharing. Use the **Screen Sharing** page to verify the viewer’s feed and record the result for the capture mode you tested.
+## Project links
 
-[MIT license](LICENSE)
+- [Architecture and security](docs/architecture.md)
+- [Test results and real-device matrix](docs/validation.md)
+- [Eye contact and virtual camera](docs/camera.md)
+- [Distribution and signing](docs/distribution.md)
+- [Contributing](CONTRIBUTING.md)
+- [MIT license](LICENSE)

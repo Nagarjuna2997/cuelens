@@ -43,18 +43,34 @@ final class AppModel {
     func openSessionSetup() {
         selection = .session
         if let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("main") == true })
-            ?? NSApp.windows.first(where: { !($0 is NSPanel) && $0.canBecomeKey && $0.title == "CueLens" }) {
+            ?? NSApp.windows.first(where: { !($0 is NSPanel) && $0.canBecomeKey && $0.title == "CueLens Pro" }) {
             NSApp.activate(ignoringOtherApps: true)
+            if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
         } else {
             openMainWindow?()
         }
     }
 
+    func minimizeMainWindow() {
+        NSApp.windows.first { $0.identifier?.rawValue.hasPrefix("main") == true }?.miniaturize(nil)
+    }
+
     var openMainWindow: (() -> Void)?
     var preferences: Preferences { workspace.preferences }
     var assistants: [AssistantProfile] { workspace.assistants }
     var activeAssistants: [AssistantProfile] { assistants.filter { !$0.archived } }
+    var materials: [KnowledgeFile] {
+        var seen = Set<MaterialContents>()
+        return assistants.flatMap(\.knowledge).filter { file in
+            seen.insert(MaterialContents(name: file.name, text: file.text)).inserted
+        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    private struct MaterialContents: Hashable {
+        let name: String
+        let text: String
+    }
 
     @discardableResult
     func savePreferences(_ value: Preferences) -> Bool {

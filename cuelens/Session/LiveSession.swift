@@ -20,6 +20,7 @@ final class LiveSession {
     private(set) var currentProvider = ProviderSelection(provider: .disabled, model: "")
     private(set) var question = ""
     private(set) var answer = ""
+    private(set) var responseIndex: Int?
     private(set) var answerError: String?
     private(set) var generating = false
     private(set) var timing: AnswerTiming?
@@ -64,6 +65,18 @@ final class LiveSession {
 
     var isOpen: Bool { phase != .idle }
     var canAnswer: Bool { isOpen && phase != .ending && currentProvider.provider != .disabled }
+    var responses: [Suggestion] { record?.suggestions ?? [] }
+    var pinnedResponses: [Suggestion] { responses.filter { $0.pinned == true } }
+    var canStepBack: Bool {
+        guard !generating, !responses.isEmpty else { return false }
+        return (responseIndex ?? responses.count) > 0
+    }
+    var canStepForward: Bool {
+        guard !generating, let responseIndex else { return false }
+        return responseIndex < responses.count - 1
+    }
+    var isPinned: Bool { responseIndex.flatMap { responses.indices.contains($0) ? responses[$0].pinned : nil } == true }
+
     var audioLive: Bool { !activeSources.isEmpty }
     var backup: AnswerProvider? { settings.backupProvider == currentProvider.provider ? nil : settings.backupProvider }
     var savingAudio: Bool { options.save && options.saveAudio }
@@ -95,6 +108,7 @@ final class LiveSession {
         composer = ""
         question = ""
         answer = ""
+        responseIndex = nil
         answerError = nil
         captureError = nil
         timing = nil
@@ -224,23 +238,62 @@ final class LiveSession {
         append(TranscriptLine(time: Date().timeIntervalSince(started), source: .manual, text: String(clean.prefix(4_000))))
     }
 
-    func answerLatest() {
+    func answerLatest(task: AnswerTask = .suggestion) {
         guard canAnswer else { return }
         let recent = record?.transcript.suffix(16).reversed() ?? [].reversed()
         if let partial = partial[.meeting], !partial.isEmpty {
             let text = QuestionDetection.question(in: partial, source: .meeting, locale: settings.speechLocale) ?? partial
             lastAutomatic = (QuestionDetection.normalized(text), Date())
-            generate(text, task: .suggestion)
+            generate(text, task: task)
         } else if let entry = recent.first(where: {
             QuestionDetection.question(in: $0.text, source: $0.source, locale: settings.speechLocale) != nil
         }) ?? recent.first(where: { $0.source == .meeting }) {
             let text = QuestionDetection.question(in: entry.text, source: .meeting, locale: settings.speechLocale) ?? entry.text
-            generate(text, task: .suggestion)
+            generate(text, task: task)
         } else if !question.isEmpty {
-            regenerate()
+            if task == .suggestion { regenerate() }
+            else { generate(question, task: task) }
         } else {
             answerError = "Type a question or wait for meeting audio."
         }
+    }
+
+    func answerWith(_ task: AnswerTask) {
+        let typed = composer.trimmingCharacters(in: .whitespacesAndNewlines)
+        if typed.isEmpty { answerLatest(task: task) }
+        else {
+            composer = ""
+            generate(typed, task: task)
+        }
+    }
+
+    func stepResponse(_ offset: Int) {
+        showResponse(at: (responseIndex ?? responses.count) + offset)
+    }
+
+    func showResponse(_ id: UUID) {
+        guard let index = responses.firstIndex(where: { $0.id == id }) else { return }
+        showResponse(at: index)
+    }
+
+    func togglePin() {
+        guard let index = responseIndex, responses.indices.contains(index), !generating else { return }
+        record?.suggestions[index].pinned = !isPinned
+        scheduleCheckpoint()
+    }
+
+    private func showResponse(at index: Int) {
+        guard !generating, responses.indices.contains(index) else { return }
+        let suggestion = responses[index]
+        responseIndex = index
+        question = suggestion.question
+        answer = suggestion.answer
+        answerError = nil
+        timing = nil
+        usage = TokenUsage()
+        lastTask = .suggestion
+        lastImage = nil
+        questionDate = nil
     }
 
     func answer(_ line: TranscriptLine) { generate(line.text, task: .suggestion) }
@@ -329,6 +382,7 @@ final class LiveSession {
         guard phase == .active || phase == .paused, let assistant else { return }
         cancelAnswer()
         question = String(text.prefix(2_000))
+        responseIndex = nil
         questionDate = ended
         lastTask = task
         lastImage = image
@@ -377,6 +431,7 @@ final class LiveSession {
                     }
                 }
                 record?.suggestions.append(.init(question: text, answer: answer, provider: connection.selection.provider))
+                responseIndex = (record?.suggestions.count ?? 1) - 1
                 scheduleCheckpoint()
                 generating = false
                 answerWork = nil

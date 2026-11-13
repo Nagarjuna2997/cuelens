@@ -30,6 +30,7 @@ struct CameraFrame {
     let original: CGImage
     let corrected: CGImage?
     let eyeCenters: [CGPoint]
+    let eyeAim: EyeAim?
     let status: String
     let fps: Double
 }
@@ -43,9 +44,13 @@ final class CameraPreview {
     private(set) var error: String?
     private(set) var publishing = false
     private(set) var virtualError: String?
+    private(set) var calibration: GazeCalibration?
+    private(set) var calibrationMessage = ""
+    private(set) var calibrating = false
+    @ObservationIgnored private var calibrationWork: Task<Void, Never>?
     var tracking = false { didSet { configure() } }
     var correction = false { didSet { configure() } }
-    var strength = 0.55 { didSet { configure() } }
+    var strength = 0.85 { didSet { configure() } }
     var preset = ResourcePreset.balanced { didSet { configure() } }
     var thermal = ProcessInfo.processInfo.thermalState { didSet { configure() } }
     var lowResources = false { didSet { configure() } }
@@ -60,6 +65,8 @@ final class CameraPreview {
         starting = true
         error = nil
         frame = nil
+        calibration = nil
+        calibrationMessage = ""
         request = Task { [weak self] in
             guard let self else { return }
             do {
@@ -114,7 +121,46 @@ final class CameraPreview {
         }
     }
 
+    func calibrate(reading: Bool) {
+        guard active, !calibrating, !lowResources, !reading || calibration != nil else { return }
+        calibrating = true
+        calibrationMessage = reading ? "Look at your notes and hold still…" : "Look directly into the camera and hold still…"
+        configure()
+        calibrationWork = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(550))
+            var samples = GazeSampler()
+            for _ in 0..<14 {
+                guard let self, !Task.isCancelled else { return }
+                if let aim = frame?.eyeAim { samples.add(aim) }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            guard let self, !Task.isCancelled else { return }
+            calibrating = false
+            if let aim = samples.result {
+                if reading {
+                    calibration?.reading = aim
+                    calibrationMessage = "Camera and reading positions calibrated."
+                } else {
+                    calibration = GazeCalibration(lens: aim)
+                    calibrationMessage = "Camera position calibrated. You can also calibrate where you read."
+                }
+            } else {
+                calibrationMessage = "Keep both eyes in view and try again."
+            }
+            configure()
+        }
+    }
+
+    func resetCalibration() {
+        calibration = nil
+        calibrationMessage = ""
+        configure()
+    }
+
     func stop() {
+        calibrationWork?.cancel()
+        calibrationWork = nil
+        calibrating = false
         token = UUID()
         request?.cancel()
         request = nil
@@ -128,8 +174,8 @@ final class CameraPreview {
 
     private func configure() {
         let safe = !lowResources && thermal != .serious && thermal != .critical
-        engine?.configure(tracking: tracking && safe, correction: correction && safe, strength: strength,
-                          preset: safe ? preset : .low, throttled: !safe)
+        engine?.configure(tracking: (tracking || calibrating) && safe, correction: correction && safe,
+                          strength: strength, calibration: calibration, preset: safe ? preset : .low, throttled: !safe)
     }
 }
 
@@ -146,7 +192,9 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
     private var tracking = false
     private var correction = false
     private var throttled = false
-    private var strength = 0.55
+    private var strength = 0.85
+    private var calibration: GazeCalibration?
+    private var smoothAim: EyeAim?
     private var fpsTarget = 12.0
     private var lastFrame = 0.0
     private var rateStart = 0.0
@@ -182,18 +230,19 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
         }
     }
 
-    func configure(tracking: Bool, correction: Bool, strength: Double, preset: ResourcePreset, throttled: Bool) {
+    func configure(tracking: Bool, correction: Bool, strength: Double, calibration: GazeCalibration?, preset: ResourcePreset, throttled: Bool) {
         queue.async {
             self.tracking = tracking
             self.correction = correction
             self.throttled = throttled
             self.strength = strength
+            self.calibration = calibration
             switch preset {
             case .low: self.fpsTarget = 8
             case .balanced: self.fpsTarget = 14
             case .performance: self.fpsTarget = 24
             }
-            if !tracking && !correction { self.gaze = nil }
+            if !tracking && !correction { self.gaze = nil; self.smoothAim = nil }
         }
     }
 
@@ -246,6 +295,7 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
         var corrected: CGImage?
         var correctedInput: CIImage?
         var centers = [CGPoint]()
+        var eyeAim: EyeAim?
         var status = throttled ? "Resource limits · Original feed" : "Original feed"
         if tracking || correction {
             if gaze == nil { gaze = GazeCorrection() }
@@ -253,15 +303,27 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
                 let eyes = gaze.eyes(in: buffer)
                 centers = eyes.map { CGPoint(x: $0.pupil.x / input.extent.width, y: 1 - $0.pupil.y / input.extent.height) }
                 if eyes.count != 2 {
+                    smoothAim = nil
                     status = "Eye landmarks uncertain · Original feed"
-                } else if correction, let image = gaze.apply(to: input, eyes: eyes, strength: strength) {
-                    corrected = context.createCGImage(image, from: input.extent)
-                    if corrected != nil { correctedInput = image }
-                    status = corrected == nil ? "Correction unavailable · Original feed" : "Experimental correction applied"
-                } else if correction {
-                    status = "Correction unavailable · Original feed"
                 } else {
-                    status = "Eye landmarks tracked locally"
+                    let aim = EyeAim(left: eyes[0].aim, right: eyes[1].aim)
+                    eyeAim = aim
+                    let smoothed = smoothAim?.averaged(with: aim, weight: 0.52) ?? aim
+                    smoothAim = smoothed
+                    if correction {
+                        let weight = calibration?.weight(for: smoothed) ?? 1
+                        if weight > 0.01, let image = gaze.apply(to: input, eyes: eyes, strength: strength * weight,
+                                                                 target: calibration?.lens, observed: smoothed) {
+                            corrected = context.createCGImage(image, from: input.extent)
+                            if corrected != nil { correctedInput = image }
+                            if corrected == nil { status = "Correction unavailable · Original feed" }
+                            else { status = calibration == nil ? "Experimental correction" : "Calibrated correction" }
+                        } else {
+                            status = "Original feed · Correction inactive"
+                        }
+                    } else {
+                        status = "Eye landmarks tracked locally"
+                    }
                 }
             }
         }
@@ -280,6 +342,6 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
             frameCount = 0
             rateStart = now
         }
-        self.output(.success(CameraFrame(original: original, corrected: corrected, eyeCenters: centers, status: status, fps: fps)))
+        self.output(.success(CameraFrame(original: original, corrected: corrected, eyeCenters: centers, eyeAim: eyeAim, status: status, fps: fps)))
     }
 }

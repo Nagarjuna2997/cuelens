@@ -144,7 +144,7 @@ struct SessionSetupView: View {
                 }
                 Toggle("Save transcript and suggestions on this Mac", isOn: $options.save)
                 Toggle("Save raw audio on this Mac", isOn: $options.saveAudio).disabled(!options.save)
-                Toggle("Open floating session window", isOn: $showFloating)
+                Toggle("Use floating window over the meeting", isOn: $showFloating)
                 LabeledContent("CueLens camera", value: model.camera.publishing ? "Sending video to virtual camera" : "Off")
             }
         }
@@ -165,7 +165,12 @@ struct SessionSetupView: View {
         if preferences != model.preferences { model.savePreferences(preferences) }
         model.overlay.register()
         model.live.start(assistant: assistant, settings: preferences, options: options)
-        if showFloating { model.overlay.show() }
+        if showFloating {
+            model.overlay.show()
+            model.minimizeMainWindow()
+        } else {
+            model.overlay.hide()
+        }
     }
 }
 

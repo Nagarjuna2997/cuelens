@@ -6,72 +6,87 @@ struct AssistantEditor: View {
     @State var profile: AssistantProfile
     let model: AppModel
     @State private var validation: String?
-    @State private var importKind = MaterialKind.reference
-    @State private var choosingFile = false
-    @State private var importing = false
+    @State private var attachment: MaterialKind?
     @State private var reviewing: KnowledgeFile?
+    @State private var response: CustomResponse?
+    @State private var showBackground = false
+
+    private var canSave: Bool { !profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var remaining: Int { max(0, KnowledgeImport.documentLimit - profile.knowledge.count) }
 
     var body: some View {
         VStack(spacing: 0) {
-            PageHeader(title: profile.name.isEmpty ? "New Assistant" : "Edit Assistant",
-                       subtitle: "Set the role, source material, and response preferences.")
+            PageHeader(title: model.assistants.contains(where: { $0.id == profile.id }) ? "Edit Assistant" : "Create Assistant",
+                       subtitle: "Set up a profile for an interview or meeting.")
                 .padding(22)
             Divider()
             Form {
-                Section("Role") {
-                    TextField("Name", text: $profile.name)
+                Section("Basics") {
+                    TextField("Name", text: $profile.name, prompt: Text("iOS Developer Interview"))
                         .accessibilityIdentifier("assistantName")
-                    TextField("Purpose", text: $profile.purpose)
                     Picker("Meeting type", selection: $profile.kind) {
                         ForEach(MeetingKind.allCases) { Text($0.rawValue).tag($0) }
                     }
                     TextField("Job title", text: $profile.jobTitle)
                     TextField("Company", text: $profile.company)
-                    EditorField(label: "Job description", text: $profile.jobDescription)
-                }
-                Section("Background") {
-                    EditorField(label: "Experience, skills, and projects", text: $profile.background)
-                    EditorField(label: "Custom instructions", text: $profile.instructions)
+                    TextField("Purpose", text: $profile.purpose)
                 }
                 Section("Materials") {
-                    Menu {
-                        ForEach(MaterialKind.allCases) { kind in
-                            Button("Attach \(kind.rawValue)") {
-                                importKind = kind
-                                choosingFile = true
-                            }
-                        }
-                    } label: {
-                        Label("Add Material", systemImage: "paperclip")
+                    HStack {
+                        Button("Upload Résumé", systemImage: "doc.badge.plus") { attachment = .resume }
+                            .accessibilityIdentifier("uploadResume")
+                        Button("Attach Job Description", systemImage: "briefcase") { attachment = .job }
+                        Button("Add Material", systemImage: "paperclip") { attachment = .reference }
+                    }.disabled(remaining == 0)
+                    if profile.knowledge.isEmpty {
+                        Text("Attach a résumé and job description for this profile. You can also paste text or reuse material from another assistant.")
+                            .foregroundStyle(.secondary)
                     }
-                    .disabled(importing || profile.knowledge.count >= KnowledgeImport.documentLimit)
                     ForEach(profile.knowledge) { file in
                         HStack {
                             VStack(alignment: .leading) {
                                 Text(file.name)
-                                Text(file.kind?.rawValue ?? "Reference").foregroundStyle(.secondary)
+                                Text(file.kind?.rawValue ?? "Reference").font(.caption).foregroundStyle(.secondary)
                             }
                             Spacer()
                             Button("Review Text") { reviewing = file }
                             Button("Remove", role: .destructive) { profile.knowledge.removeAll { $0.id == file.id } }
                         }
                     }
-                    if importing { ProgressView("Extracting text…").controlSize(.small) }
+                    DisclosureGroup("Additional background and job details", isExpanded: $showBackground) {
+                        EditorField(label: "Experience, skills, and projects", text: $profile.background)
+                        EditorField(label: "Job description", text: $profile.jobDescription)
+                    }
                 }
-                Section("Responses") {
-                    Picker("Format", selection: $profile.format) {
-                        ForEach(AnswerFormat.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    Picker("Length", selection: $profile.length) {
-                        ForEach(AnswerLength.allCases) { Text($0.rawValue).tag($0) }
-                    }
-                    TextField("Language", text: $profile.language)
-                    TextField("Tone", text: $profile.tone)
+                Section("Configuration") {
                     Picker("Answer provider", selection: $profile.provider) {
                         Text("Use app setting").tag(Optional<AnswerProvider>.none)
                         ForEach(AnswerProvider.allCases) { Text($0.rawValue).tag(Optional($0)) }
                     }
                     TextField("Model override", text: $profile.model)
+                    EditorField(label: "Instructions", text: $profile.instructions)
+                    TextField("Language", text: $profile.language)
+                    TextField("Tone", text: $profile.tone)
+                }
+                Section("Response types") {
+                    Picker("Default format", selection: $profile.format) {
+                        ForEach(AnswerFormat.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    Picker("Length", selection: $profile.length) {
+                        ForEach(AnswerLength.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    ForEach(profile.customResponses ?? []) { item in
+                        HStack {
+                            Text(item.name)
+                            Spacer()
+                            Button("Edit") { response = item }
+                            Button("Remove", role: .destructive) { profile.customResponses?.removeAll { $0.id == item.id } }
+                        }
+                    }
+                    Button("Add Response Type", systemImage: "plus") { response = CustomResponse() }
+                        .disabled((profile.customResponses?.count ?? 0) >= 12)
+                }
+                Section("Session preferences") {
                     Toggle("Suggest answers automatically", isOn: $profile.liveSuggestions)
                     Toggle("Save transcripts and suggestions for this assistant", isOn: $profile.retainSession)
                 }
@@ -82,25 +97,21 @@ struct AssistantEditor: View {
                 if let validation { Text(validation).foregroundStyle(.secondary) }
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Save Assistant") {
-                    if model.saveAssistant(profile) { dismiss() }
-                    else { validation = model.error }
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(importing || profile.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                .accessibilityIdentifier("saveAssistant")
+                Button("Save Assistant") { save(launch: false) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!canSave)
+                    .accessibilityIdentifier("saveAssistant")
+                Button("Save & Launch") { save(launch: true) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSave || profile.archived)
             }
             .padding(16)
         }
-        .frame(width: 640, height: 630)
-        .fileImporter(isPresented: $choosingFile, allowedContentTypes: [
-            .pdf, .plainText,
-            UTType(filenameExtension: "docx") ?? .data,
-            UTType(filenameExtension: "md") ?? .plainText
-        ]) { result in
-            switch result {
-            case .success(let url): importFile(url, kind: importKind)
-            case .failure(let error): validation = error.localizedDescription
+        .frame(width: 680, height: 690)
+        .sheet(item: $attachment) { kind in
+            MaterialPicker(kind: kind, library: model.materials, available: remaining) { materials in
+                profile.knowledge.append(contentsOf: materials.prefix(remaining))
+                attachment = nil
             }
         }
         .sheet(item: $reviewing) { file in
@@ -111,18 +122,26 @@ struct AssistantEditor: View {
                 reviewing = nil
             } close: { reviewing = nil }
         }
+        .sheet(item: $response) { item in
+            ResponseEditor(response: item) { updated in
+                var responses = profile.customResponses ?? []
+                if let index = responses.firstIndex(where: { $0.id == updated.id }) { responses[index] = updated }
+                else { responses.append(updated) }
+                profile.customResponses = responses
+                response = nil
+            } cancel: { response = nil }
+        }
     }
 
-    private func importFile(_ url: URL, kind: MaterialKind) {
-        importing = true
-        validation = nil
-        Task {
-            defer { importing = false }
-            do {
-                let file = try await Task.detached(priority: .userInitiated) { try KnowledgeImport.read(url, kind: kind) }.value
-                profile.knowledge.append(file)
-                reviewing = file
-            } catch { validation = error.localizedDescription }
+    private func save(launch: Bool) {
+        if model.saveAssistant(profile) {
+            if launch {
+                model.selectedAssistantID = profile.id
+                model.selection = .session
+            }
+            dismiss()
+        } else {
+            validation = model.error
         }
     }
 }
@@ -168,5 +187,34 @@ private struct MaterialReview: View {
         }
         .padding(22)
         .frame(width: 590, height: 430)
+    }
+}
+
+private struct ResponseEditor: View {
+    @State var response: CustomResponse
+    let save: (CustomResponse) -> Void
+    let cancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(response.name.isEmpty ? "Add Response Type" : "Edit Response Type").font(.title2)
+            TextField("Name", text: $response.name, prompt: Text("Tradeoffs"))
+                .textFieldStyle(.roundedBorder)
+            EditorField(label: "Instructions", text: $response.instructions, height: 120)
+            HStack {
+                Spacer()
+                Button("Cancel", action: cancel).keyboardShortcut(.cancelAction)
+                Button("Save Response Type") {
+                    response.name = String(response.name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(48))
+                    response.instructions = String(response.instructions.trimmingCharacters(in: .whitespacesAndNewlines).prefix(800))
+                    save(response)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(response.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                          || response.instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+        .padding(22)
+        .frame(width: 490, height: 300)
     }
 }

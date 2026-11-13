@@ -74,10 +74,19 @@ enum ResourcePreset: String, Codable, CaseIterable, Identifiable {
     var id: Self { self }
 }
 
+enum MaterialKind: String, Codable, CaseIterable, Identifiable {
+    case resume = "Resume"
+    case job = "Job description"
+    case reference = "Reference"
+
+    var id: Self { self }
+}
+
 struct KnowledgeFile: Codable, Equatable, Identifiable {
     var id = UUID()
     var name: String
     var text: String
+    var kind: MaterialKind?
 }
 
 struct AssistantProfile: Codable, Equatable, Identifiable {
@@ -146,6 +155,7 @@ enum AudioSource: String, Codable, CaseIterable, Identifiable {
     case microphone = "Me"
     case meeting = "Meeting audio"
     case manual = "Typed"
+    case practice = "Mock interviewer"
 
     var id: Self { self }
 }
@@ -155,6 +165,7 @@ struct TranscriptLine: Codable, Equatable, Identifiable {
     var time: TimeInterval
     var source: AudioSource
     var text: String
+    var provisional: Bool?
 
     var timestamp: String {
         let seconds = Int(max(0, min(time.isFinite ? time : 0, 359_999)))

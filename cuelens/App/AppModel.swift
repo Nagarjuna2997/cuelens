@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 import Observation
 
 @MainActor
@@ -6,6 +6,9 @@ import Observation
 final class AppModel {
     let vault: Vault
     let credentials: any CredentialStore
+    let live: LiveSession
+    @ObservationIgnored lazy var overlay = FloatingWindow(model: self)
+    var selectedAssistantID: UUID?
     private(set) var workspace = Workspace()
     private(set) var history = [MeetingSession]()
     private(set) var workspaceReady = false
@@ -15,6 +18,7 @@ final class AppModel {
     init(vault: Vault = .live(), credentials: any CredentialStore = Keychain()) {
         self.vault = vault
         self.credentials = credentials
+        live = LiveSession(vault: vault, credentials: credentials)
         do {
             workspace = try vault.load()
             workspaceReady = true
@@ -23,8 +27,21 @@ final class AppModel {
         }
         do { history = try vault.sessions() }
         catch { self.error = "CueLens couldn’t read the session history. Check the Sessions folder in \(vault.directory.path)." }
+        live.onSaved = { [weak self] session in self?.updateHistory(session) }
     }
 
+    func openSessionSetup() {
+        selection = .session
+        if let window = NSApp.windows.first(where: { $0.identifier?.rawValue.hasPrefix("main") == true })
+            ?? NSApp.windows.first(where: { !($0 is NSPanel) && $0.canBecomeKey && $0.title == "CueLens" }) {
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            openMainWindow?()
+        }
+    }
+
+    var openMainWindow: (() -> Void)?
     var preferences: Preferences { workspace.preferences }
     var assistants: [AssistantProfile] { workspace.assistants }
     var activeAssistants: [AssistantProfile] { assistants.filter { !$0.archived } }
@@ -59,14 +76,18 @@ final class AppModel {
     func saveSession(_ session: MeetingSession) -> Bool {
         do {
             try vault.save(session)
-            history.removeAll { $0.id == session.id }
-            history.append(session)
-            history.sort { $0.startedAt > $1.startedAt }
+            updateHistory(session)
             return true
         } catch {
             self.error = "CueLens couldn’t save this session. Check available storage and try again."
             return false
         }
+    }
+
+    private func updateHistory(_ session: MeetingSession) {
+        history.removeAll { $0.id == session.id }
+        history.append(session)
+        history.sort { $0.startedAt > $1.startedAt }
     }
 
     func deleteSession(_ id: UUID) {
@@ -103,6 +124,7 @@ enum NavigationSection: String, CaseIterable, Identifiable {
     case session = "Live Session"
     case history = "History"
     case providers = "Providers"
+    case privacy = "Screen Sharing"
 
     var id: Self { self }
 
@@ -113,6 +135,7 @@ enum NavigationSection: String, CaseIterable, Identifiable {
         case .session: "waveform"
         case .history: "clock.arrow.circlepath"
         case .providers: "slider.horizontal.3"
+        case .privacy: "rectangle.dashed"
         }
     }
 }

@@ -27,11 +27,17 @@ struct ContentView: View {
             case .assistants:
                 AssistantsView(model: model) { editing = $0 }
             case .session:
-                SessionSetupView(model: model)
+                if model.live.isOpen {
+                    SessionWorkspace(live: model.live, floating: false, overlay: model.workspace.overlay ?? OverlayPreferences())
+                } else {
+                    SessionSetupView(model: model)
+                }
             case .history:
                 HistoryView(model: model)
             case .providers:
                 ProvidersView(model: model)
+            case .privacy:
+                PrivacyView(model: model)
             }
         }
         .tint(CueStyle.accent)
@@ -121,6 +127,10 @@ struct OverviewView: View {
                             model.savePreferences(settings)
                         }
                     }
+                }
+                HStack {
+                    Button("Show Floating Bar", systemImage: "macwindow.on.rectangle") { model.overlay.toggle() }
+                    Button("Screen Share Test", systemImage: "rectangle.dashed") { model.selection = .privacy }
                 }
                 if !model.history.isEmpty {
                     Button("View Session History") { model.selection = .history }
@@ -221,42 +231,6 @@ struct AssistantsView: View {
         (showArchived ? model.assistants : model.activeAssistants).sorted {
             $0.name.localizedStandardCompare($1.name) == .orderedAscending
         }
-    }
-}
-
-struct SessionSetupView: View {
-    let model: AppModel
-    @State private var assistantID: UUID?
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                PageHeader(title: "Live Session", subtitle: "Review your assistant and providers before starting.")
-                if model.activeAssistants.isEmpty {
-                    CueCard {
-                        Text("Create an assistant to set up a session.")
-                        Button("Open Assistants") { model.selection = .assistants }
-                    }
-                } else {
-                    Form {
-                        Picker("Assistant", selection: $assistantID) {
-                            ForEach(model.activeAssistants) { Text($0.name).tag(Optional($0.id)) }
-                        }
-                        if let assistant = model.activeAssistants.first(where: { $0.id == assistantID }) {
-                            LabeledContent("Answers", value: model.preferences.answerSelection(for: assistant).provider.rawValue)
-                            LabeledContent("Transcription", value: model.preferences.speechProvider.rawValue)
-                            LabeledContent("Save transcript", value: assistant.retainSession ? "On" : "Off")
-                        }
-                    }.formStyle(.grouped)
-                    Label("Live audio capture is pending implementation in this build.", systemImage: "info.circle")
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: 780)
-            .padding(30)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
-        .onAppear { assistantID = model.activeAssistants.first?.id }
     }
 }
 

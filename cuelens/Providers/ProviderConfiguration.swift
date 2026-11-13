@@ -78,6 +78,7 @@ struct ProviderConnection {
         url.scheme = "https"
         url.host = selection.provider.host
         var body: [String: Any]
+        let screenshot = prompt.image?.data.base64EncodedString()
         var auth: [String: String]
         switch selection.provider {
         case .disabled:
@@ -87,12 +88,25 @@ struct ProviderConnection {
             auth = ["Authorization": "Bearer \(apiKey)"]
             body = ["model": model, "instructions": prompt.instructions, "input": prompt.input,
                     "max_output_tokens": prompt.outputLimit, "stream": true, "store": false]
+            if let screenshot {
+                body["input"] = [["role": "user", "content": [
+                    ["type": "input_text", "text": prompt.input],
+                    ["type": "input_image", "image_url": "data:image/jpeg;base64," + screenshot, "detail": "high"]
+                ]]]
+            }
         case .claude:
             url.path = "/v1/messages"
             auth = ["x-api-key": apiKey, "anthropic-version": "2023-06-01"]
             body = ["model": model, "system": prompt.instructions,
                     "messages": [["role": "user", "content": prompt.input]], "max_tokens": prompt.outputLimit,
                     "stream": true]
+            if let screenshot {
+                let content: [[String: Any]] = [
+                    ["type": "text", "text": prompt.input],
+                    ["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": screenshot]]
+                ]
+                body["messages"] = [["role": "user", "content": content]]
+            }
         case .gemini:
             url.path = "/v1beta/models/\(model):streamGenerateContent"
             url.queryItems = [URLQueryItem(name: "alt", value: "sse")]
@@ -100,6 +114,17 @@ struct ProviderConnection {
             body = ["systemInstruction": ["parts": [["text": prompt.instructions]]],
                     "contents": [["role": "user", "parts": [["text": prompt.input]]]],
                     "generationConfig": ["maxOutputTokens": prompt.outputLimit, "candidateCount": 1]]
+            if model.hasPrefix("gemini-3.8-flash") {
+                body["generationConfig"] = ["maxOutputTokens": prompt.outputLimit, "candidateCount": 1,
+                                            "thinkingConfig": ["thinkingLevel": "minimal"]]
+            }
+            if let screenshot {
+                let parts: [[String: Any]] = [
+                    ["text": prompt.input],
+                    ["inlineData": ["mimeType": "image/jpeg", "data": screenshot]]
+                ]
+                body["contents"] = [["role": "user", "parts": parts]]
+            }
         }
         guard let endpoint = url.url else { throw ProviderError.invalidResponse }
         var request = URLRequest(url: endpoint)
@@ -116,6 +141,7 @@ struct ProviderPrompt {
     let instructions: String
     let input: String
     let outputLimit: Int
+    var image: CaptureImage? = nil
 
     static let connectionTest = Self(instructions: "Reply with the single word Ready.", input: "Connection test.", outputLimit: 384)
 }

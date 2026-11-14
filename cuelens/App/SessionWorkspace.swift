@@ -95,23 +95,25 @@ struct SessionWorkspace: View {
             if floating, let model {
                 icon("Camera Studio", systemImage: "video") { model.cameraWindow.show() }
             }
-            Button(live.phase == .paused ? "Resume" : "Pause", systemImage: live.phase == .paused ? "play.fill" : "pause.fill") {
-                if live.phase == .paused { live.resume() } else { live.pause() }
-            }
-            .labelStyle(.iconOnly)
-            .help(live.phase == .paused ? "Resume session audio" : "Pause session audio")
-            .accessibilityIdentifier("pauseSession")
-            Button("End", systemImage: "stop.fill") {
-                if let model { model.endSession() } else { live.end() }
-            }.disabled(live.phase == .ending).accessibilityIdentifier("endSession")
-            if let onCompact {
-                Button("Minimize", systemImage: "arrow.down.right.and.arrow.up.left") { onCompact() }
-                    .labelStyle(.iconOnly)
-                    .help("Minimize to the floating bar")
-                    .accessibilityIdentifier("minimizeSession")
+            if !floating {
+                Button(live.phase == .paused ? "Resume" : "Pause", systemImage: live.phase == .paused ? "play.fill" : "pause.fill") {
+                    if live.phase == .paused { live.resume() } else { live.pause() }
+                }
+                .labelStyle(.iconOnly)
+                .help(live.phase == .paused ? "Resume session audio" : "Pause session audio")
+                .accessibilityIdentifier("pauseSession")
+                Button("End", systemImage: "stop.fill") {
+                    if let model { model.endSession() } else { live.end() }
+                }.disabled(live.phase == .ending).accessibilityIdentifier("endSession")
+                if let onCompact {
+                    Button("Minimize", systemImage: "arrow.down.right.and.arrow.up.left") { onCompact() }
+                        .labelStyle(.iconOnly)
+                        .help("Minimize to the floating bar")
+                        .accessibilityIdentifier("minimizeSession")
+                }
             }
             answerOptions
-            if let opacityController, let model { PanelQuickSettings(controller: opacityController, model: model) }
+            if !floating, let opacityController, let model { PanelQuickSettings(controller: opacityController, model: model) }
         }
         .buttonStyle(.borderless)
         .padding(.horizontal, 12)

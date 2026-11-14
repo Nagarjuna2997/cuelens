@@ -49,16 +49,26 @@ final class CueLensUITests: XCTestCase {
             XCTAssertEqual(toggle.value as? String, "0")
         }
         start.click()
-        let minimize = app.buttons["minimizeSession"]
+        let panel = app.descendants(matching: .any).matching(identifier: "cuelens.floating").firstMatch
+        let compactBar = app.descendants(matching: .any).matching(identifier: "cuelens.bar").firstMatch
+        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        // The live controls belong to the same window as transcript and answers.
+        XCTAssertTrue(panel.buttons["barAudioSources"].exists)
+        XCTAssertTrue(panel.buttons["barEndSession"].exists)
+        XCTAssertFalse(compactBar.exists && compactBar.isHittable)
+        let minimize = app.buttons["barMinimizeSession"]
         XCTAssertTrue(minimize.waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["startSession"].exists)
         XCTAssertFalse(app.buttons["sendQuestion"].isEnabled)
         minimize.click()
         let restore = app.buttons["restoreSession"]
         XCTAssertTrue(restore.waitForExistence(timeout: 5))
+        XCTAssertTrue(compactBar.buttons["barEndSession"].exists)
         XCTAssertFalse(app.buttons["sendQuestion"].exists)
         restore.click()
         XCTAssertTrue(app.buttons["sendQuestion"].waitForExistence(timeout: 5))
+        XCTAssertTrue(panel.buttons["barEndSession"].exists)
+        XCTAssertFalse(compactBar.exists && compactBar.isHittable)
         let end = app.buttons["barEndSession"]
         XCTAssertTrue(end.waitForExistence(timeout: 5))
         end.click()

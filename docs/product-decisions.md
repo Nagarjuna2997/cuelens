@@ -4,7 +4,7 @@ These decisions capture the user's current requirements for this repository.
 
 - Keep the **CueLens** name, existing app icon, native macOS project, and repository.
 - The main app is the studio and setup workspace. Starting a session hides it and opens separate floating controls. Never surface the main app automatically after Start, Minimize, Restore, or End.
-- Keep a floating control bar visible beside live response and transcript panels. Minimize collapses the live panels to the bar. End stops capture, saves enabled history, and leaves the bar.
+- Attach the live control bar to the top of the transcript-and-answer window so dragging moves them together. Minimize leaves only the compact bar; Restore expands it at the same location. End stops CueLens capture, saves enabled history, and leaves the bar.
 - The idle bar's Play action starts the selected assistant directly. Opening setup is a separate, explicit action.
 - Keep one camera-start action and one detach-preview action per panel. Disable preview-only controls before a frame exists. Live Quick Settings handle panel adjustments; Open Setup is the deliberate route back to the main app.
 - Remember conversation audio sources consistently from the bar and transcript. Practice defaults meeting audio off and keeps its source choices separate from conversation preferences.
@@ -12,6 +12,7 @@ These decisions capture the user's current requirements for this repository.
 - Assistant fields and résumé/material uploads are optional. Store separate context and practice progress for each role.
 - Answers use OpenAI, Claude, or Gemini. Keep API credentials in Keychain and out of the public repository. Do not extract consumer-app login cookies or pretend those logins provide supported API access.
 - Make answer formatting readable: a concise opening, native headings and lists, expandable details, and copyable code. Keep personal claims grounded in uploaded experience.
+- Starting the selected camera with a session is an explicit persisted option. Never substitute the physical camera when a selected external source is unavailable. External apps control their own processing and capture lifecycle.
 - Keep camera processing local. Automatic framing and posture coaching are separate from eye-contact correction. Mark gaze correction unavailable until a licensed model has been integrated and validated.
 - Record audio only when enabled. Screen context is optional and captured images are reviewed before sending. Turning screen context off removes the pending image.
 - Never claim universal invisibility during screen sharing. The operating system and receiving meeting app determine what is visible.

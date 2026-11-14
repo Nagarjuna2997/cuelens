@@ -232,8 +232,8 @@ struct CameraView: View {
                     }
                 }
                 CueCard {
-                    HStack { Text("Eye contact correction").font(.headline); Spacer(); Text("Unavailable").foregroundStyle(.secondary) }
-                    Text("A licensed gaze-correction model has not been validated on this Mac. Automatic framing adjusts the crop. For natural eye contact, put your answer window close to the camera lens.")
+                    HStack { Text("Built-in eye contact correction").font(.headline); Spacer(); Text("Unavailable").foregroundStyle(.secondary) }
+                    Text("CueLens does not yet redirect your eyes. Automatic framing only adjusts the crop. If you select an external camera, its app controls any eye correction; CueLens cannot verify that it is enabled.")
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 virtualCameraSection

@@ -7,6 +7,7 @@ struct SessionSetupView: View {
     @State private var options = SessionOptions()
     @State private var check = AudioCheck()
     @State private var inputs = [Microphone]()
+    @State private var cameras = [CameraDevice]()
     @State private var microphoneID: String?
     @State private var editing: AssistantProfile?
 
@@ -18,6 +19,10 @@ struct SessionSetupView: View {
     }
     private var audioSources: [AudioSource] {
         [(AudioSource.microphone, options.microphone), (.meeting, options.meetingAudio)].compactMap { $0.1 ? $0.0 : nil }
+    }
+    private var selectedCameraName: String {
+        guard let id = model.camera.deviceID else { return "System default" }
+        return cameras.first { $0.id == id }?.name ?? "Selected camera unavailable"
     }
 
     var body: some View {
@@ -82,6 +87,22 @@ struct SessionSetupView: View {
                             .onChange(of: options.saveAudio) { if options.saveAudio { options.save = true } }
                         Toggle("Enable screen context", isOn: $options.screenContext)
                             .help("⌘X captures a display locally. Answer sends the attached image to your provider.")
+                        Toggle("Start selected camera with session", isOn: Binding(
+                            get: { model.preferences.startCameraWithSession ?? false },
+                            set: { enabled in
+                                var preferences = model.preferences
+                                preferences.startCameraWithSession = enabled
+                                model.savePreferences(preferences)
+                            }
+                        )).accessibilityIdentifier("startCameraWithSession")
+                        HStack(spacing: 8) {
+                            Label(selectedCameraName, systemImage: "video")
+                                .lineLimit(1).help(selectedCameraName)
+                            Spacer(minLength: 0)
+                            Button("Choose Camera") { model.selection = .camera }.buttonStyle(.borderless)
+                        }.font(.caption).foregroundStyle(.secondary)
+                        Text("Starts the selected video source in CueLens. External camera apps control their own effects.")
+                            .font(.caption).foregroundStyle(.secondary)
                         Text(options.saveAudio ? "Audio and transcript will be saved on this Mac." : "Recording is off. You control what is captured and saved.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -165,6 +186,7 @@ struct SessionSetupView: View {
         .background(CueStyle.canvas)
         .onAppear {
             inputs = Microphone.available()
+            cameras = CameraDevice.available()
             microphoneID = model.preferences.microphoneID
             options.microphone = model.preferences.sessionMicrophone ?? true
             options.meetingAudio = practice ? false : (model.preferences.sessionMeetingAudio ?? true)
@@ -177,8 +199,14 @@ struct SessionSetupView: View {
             options.meetingAudio = options.practice ? false : (model.preferences.sessionMeetingAudio ?? true)
         }
         .onChange(of: options.save) { if !options.save { options.saveAudio = false } }
-        .onReceive(NotificationCenter.default.publisher(for: AVCaptureDevice.wasConnectedNotification)) { _ in inputs = Microphone.available() }
-        .onReceive(NotificationCenter.default.publisher(for: AVCaptureDevice.wasDisconnectedNotification)) { _ in inputs = Microphone.available() }
+        .onReceive(NotificationCenter.default.publisher(for: AVCaptureDevice.wasConnectedNotification)) { _ in
+            inputs = Microphone.available()
+            cameras = CameraDevice.available()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVCaptureDevice.wasDisconnectedNotification)) { _ in
+            inputs = Microphone.available()
+            cameras = CameraDevice.available()
+        }
         .onDisappear { check.stop() }
         .sheet(item: $editing) { AssistantEditor(profile: $0, model: model) }
     }
@@ -233,9 +261,11 @@ struct SessionSetupView: View {
         }
         preferences.sessionScreenContext = options.screenContext
         if preferences != model.preferences { model.savePreferences(preferences) }
+        options.previewCamera = preferences.startCameraWithSession ?? false
         model.live.start(assistant: selected, settings: preferences, options: options)
         model.overlay.register()
         guard model.live.isOpen else { return }
+        model.startCameraForSessionIfEnabled()
         model.overlay.show(focus: true)
         model.minimizeMainWindow()
     }

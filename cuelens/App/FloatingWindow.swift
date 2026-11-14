@@ -175,11 +175,13 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
 
     private func display(_ requestedMode: Mode, focus: Bool = false) {
         guard let model else { return }
+        let previousMode = mode
+        let compactFrame = barPanel?.isVisible == true ? barPanel?.frame : nil
         rememberResponseFrame()
         mode = requestedMode
         visible = true
-        showControlBar()
         if requestedMode == .bar {
+            showControlBar(anchor: previousMode == .session ? expandedFrame : nil)
             panel?.orderOut(nil)
             transcriptPanel?.orderOut(nil)
             refreshAppearance()
@@ -188,43 +190,44 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
 
         let window = panel ?? makeMainPanel()
         let settings = model.workspace.overlay ?? OverlayPreferences()
-        let bounds = barPanel?.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        let screen = previousMode == .bar ? barPanel?.screen : window.screen
+        let bounds = screen?.visibleFrame ?? NSScreen.main?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
         let target: NSSize
         let minimum: NSSize
         if requestedMode == .session {
-            target = expandedFrame?.size ?? (settings.compact ? NSSize(width: 740, height: 440) : NSSize(width: 900, height: 500))
-            minimum = NSSize(width: 630, height: 350)
+            target = expandedFrame?.size ?? (settings.compact ? NSSize(width: 740, height: 494) : NSSize(width: 900, height: 554))
+            minimum = NSSize(width: 630, height: 404)
         } else {
             target = NSSize(width: 360, height: 115)
             minimum = target
         }
-        let size = NSSize(width: min(target.width, bounds.width), height: min(target.height, bounds.height))
+        let size = NSSize(width: min(max(target.width, minimum.width), bounds.width),
+                          height: min(max(target.height, minimum.height), bounds.height))
         window.minSize = NSSize(width: min(minimum.width, bounds.width), height: min(minimum.height, bounds.height))
         window.maxSize = requestedMode == .session ? bounds.size : target
-        let anchor = barPanel?.frame ?? bounds
         let savedFrame = requestedMode == .session ? expandedFrame : nil
-        let x = savedFrame?.minX ?? (anchor.midX - size.width / 2)
-        let top = savedFrame?.maxY ?? (anchor.minY - 10)
+        let anchor = previousMode == .bar ? compactFrame : nil
+        let x = anchor.map { $0.midX - size.width / 2 } ?? savedFrame?.minX ?? (bounds.midX - size.width / 2)
+        let top = anchor?.maxY ?? savedFrame?.maxY ?? (bounds.maxY - 14)
         let frame = NSRect(x: max(bounds.minX, min(bounds.maxX - size.width, x)),
                            y: max(bounds.minY, min(bounds.maxY - size.height, top - size.height)),
                            width: size.width, height: size.height)
         // Live transparency belongs to the background view. Keep text and controls opaque.
         window.alphaValue = 1
         window.setFrame(frame, display: true, animate: false)
+        barPanel?.orderOut(nil)
         window.orderFrontRegardless()
         panel = window
-        barPanel?.orderFrontRegardless()
         refreshAppearance()
         if focus, requestedMode == .session {
             // Explicit Start/Restore focuses only the nonactivating response panel.
             // Hotkeys use focus:false so the meeting keeps its keyboard focus.
             window.makeKeyAndOrderFront(nil)
-            barPanel?.orderFrontRegardless()
         }
     }
 
-    private func showControlBar() {
+    private func showControlBar(anchor: NSRect? = nil) {
         guard let model else { return }
         let firstDisplay = barPanel == nil
         let window: CuePanel
@@ -236,13 +239,14 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
                 .ignoresSafeArea().tint(CueStyle.accent))
             barPanel = window
         }
-        let bounds = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        let screen = anchor == nil ? window.screen : panel?.screen
+        let bounds = screen?.visibleFrame ?? NSScreen.main?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
         let target = NSSize(width: model.live.isOpen ? 560 : 440, height: 54)
         let size = NSSize(width: min(target.width, bounds.width), height: target.height)
         let old = window.frame
-        let x = firstDisplay ? bounds.midX - size.width / 2 : old.midX - size.width / 2
-        let top = firstDisplay ? bounds.maxY - 14 : old.maxY
+        let x = (anchor?.midX ?? (firstDisplay ? bounds.midX : old.midX)) - size.width / 2
+        let top = anchor?.maxY ?? (firstDisplay ? bounds.maxY - 14 : old.maxY)
         window.minSize = size
         window.maxSize = size
         window.alphaValue = barOpacity
@@ -324,9 +328,14 @@ private struct FloatingContent: View {
         } else if model.live.isOpen {
             // Keep this view alive while the response window is minimized so its
             // transcript visibility, pinned section, and scroll state survive restore.
-            SessionWorkspace(live: model.live, floating: true, overlay: model.workspace.overlay ?? OverlayPreferences(),
-                             onMain: { model.openSessionSetup() }, onCompact: { controller.compact() }, onHide: { controller.hide() },
-                             opacityController: controller, model: model)
+            VStack(spacing: 0) {
+                FloatingBar(model: model, controller: controller, attached: true)
+                    .frame(height: 54)
+                Divider()
+                SessionWorkspace(live: model.live, floating: true, overlay: model.workspace.overlay ?? OverlayPreferences(),
+                                 onMain: { model.openSessionSetup() }, onCompact: { controller.compact() }, onHide: { controller.hide() },
+                                 opacityController: controller, model: model)
+            }
                 .clipShape(RoundedRectangle(cornerRadius: 12))
                 .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary).allowsHitTesting(false) }
         }
@@ -337,6 +346,7 @@ private struct FloatingContent: View {
 private struct FloatingBar: View {
     let model: AppModel
     let controller: FloatingWindow
+    var attached = false
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
@@ -384,8 +394,8 @@ private struct FloatingBar: View {
                         .disabled(model.live.phase != .active)
                 }
                 if controller.mode == .session {
-                    Button("Minimize Panels", systemImage: "arrow.down.right.and.arrow.up.left") { controller.showBar() }
-                        .labelStyle(.iconOnly).help("Keep the bar and hide the transcript and response panels")
+                    Button("Minimize", systemImage: "arrow.down.right.and.arrow.up.left") { controller.showBar() }
+                        .labelStyle(.iconOnly).help("Return to the compact bar")
                         .accessibilityIdentifier("barMinimizeSession")
                 } else {
                     Button("Restore", systemImage: "arrow.up.left.and.arrow.down.right") { controller.show(focus: true) }
@@ -415,15 +425,20 @@ private struct FloatingBar: View {
         .padding(.horizontal, 13)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
-            if model.live.isOpen {
+            if attached {
+                Rectangle().fill(Color(nsColor: .windowBackgroundColor)
+                    .opacity(reduceTransparency ? 1 : (model.workspace.overlay ?? OverlayPreferences()).liveBackgroundOpacity))
+            } else if model.live.isOpen {
                 Capsule().fill(Color(nsColor: .windowBackgroundColor)
                     .opacity(reduceTransparency ? 1 : (model.workspace.overlay ?? OverlayPreferences()).liveBackgroundOpacity))
             } else {
                 Capsule().fill(.regularMaterial)
             }
         }
-        .overlay { Capsule().strokeBorder(.quaternary).allowsHitTesting(false) }
-        .padding(3)
+        .overlay {
+            if !attached { Capsule().strokeBorder(.quaternary).allowsHitTesting(false) }
+        }
+        .padding(attached ? 0 : 3)
     }
 
     private var audioSourcesMenu: some View {

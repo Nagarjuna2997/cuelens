@@ -137,11 +137,17 @@ final class AppModel {
         if updated != preferences { savePreferences(updated) }
     }
 
+    func startCameraForSessionIfEnabled() {
+        guard live.phase == .active, live.options.previewCamera, !camera.active, !camera.starting else { return }
+        camera.start(deviceID: camera.deviceID)
+    }
+
     func quickSessionOptions(for assistant: AssistantProfile) -> SessionOptions {
         var options = SessionOptions()
         options.microphone = preferences.sessionMicrophone ?? true
         options.meetingAudio = assistant.kind == .mockInterview ? false : (preferences.sessionMeetingAudio ?? true)
         options.screenContext = preferences.sessionScreenContext ?? false
+        options.previewCamera = preferences.startCameraWithSession ?? false
         options.save = assistant.retainSession
         options.practice = assistant.kind == .mockInterview
         // Audio recording and cloud transcription need a deliberate session choice.
@@ -166,6 +172,7 @@ final class AppModel {
         selectedAssistantID = assistant.id
         live.start(assistant: assistant, settings: preferences, options: quickSessionOptions(for: assistant))
         guard live.isOpen else { return }
+        startCameraForSessionIfEnabled()
         overlay.register()
         minimizeMainWindow()
         overlay.show(focus: true)

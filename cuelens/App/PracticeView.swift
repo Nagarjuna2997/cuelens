@@ -75,9 +75,11 @@ struct PracticeView: View {
         let style = sessions.first(where: { $0.practiceAttempts?.contains(where: { $0.id == attempt.id }) == true })?.practiceStyle ?? .technical
         model.live.start(assistant: assistant, settings: model.preferences,
                          options: .init(microphone: model.preferences.sessionMicrophone ?? true,
-                                        meetingAudio: false, save: true, practice: true, practiceStyle: style,
+                                        meetingAudio: false, save: true, practice: true,
+                                        previewCamera: model.preferences.startCameraWithSession ?? false, practiceStyle: style,
                                         reviewTopic: attempt.reviewTopic ?? attempt.question))
         guard model.live.isOpen else { return }
+        model.startCameraForSessionIfEnabled()
         model.overlay.register()
         model.overlay.show(focus: true)
         model.minimizeMainWindow()

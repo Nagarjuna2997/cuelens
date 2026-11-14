@@ -139,6 +139,7 @@ struct Preferences: Codable, Equatable {
     var sessionMicrophone: Bool?
     var sessionMeetingAudio: Bool?
     var sessionScreenContext: Bool?
+    var startCameraWithSession: Bool?
 
     func answerSelection(for assistant: AssistantProfile) -> ProviderSelection {
         let provider = assistant.provider ?? answerProvider

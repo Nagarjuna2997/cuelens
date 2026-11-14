@@ -657,7 +657,7 @@ private struct SessionComposer: View {
     @State private var importing = false
 
     private var sendLabel: String {
-        if live.captureImage != nil { return "Solve Image" }
+        if !live.captureAttachments.isEmpty { return live.captureAttachments.count == 1 ? "Solve Image" : "Solve Images" }
         if !live.composer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return live.options.practice ? "Review Answer" : "Ask CueLens"
         }
@@ -666,31 +666,26 @@ private struct SessionComposer: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            if let capture = live.captureImage, let preview = NSImage(data: capture.data) {
-                HStack(spacing: 10) {
-                    Image(nsImage: preview).resizable().scaledToFit().frame(width: 104, height: 64)
-                        .accessibilityLabel("Selected image preview")
-                    Text("Review this image before sending it to \(live.currentProvider.provider.shortName).")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Remove Image", systemImage: "xmark.circle") { live.discardImage() }.labelStyle(.iconOnly)
-                }
+            if !live.captureAttachments.isEmpty {
+                imageAttachments
             }
-            if live.capturing { ProgressView("Capturing display…").controlSize(.small) }
+            if live.capturing { ProgressView("Adding images…").controlSize(.small) }
             if let error = live.captureError { Text(error).font(.caption).foregroundStyle(.secondary) }
             HStack(spacing: 10) {
                 HStack(spacing: 7) {
                     Menu {
                         Button("Capture Full Display · ⌘X") { live.captureScreen() }
                         Button("Capture a Window") { live.pickWindow() }
-                        Button("Choose an Image…") { importing = true }
+                        Button("Choose Images…") { importing = true }
                     } label: {
                         Label("Capture", systemImage: "camera").labelStyle(.iconOnly)
                     }
                     .menuStyle(.borderlessButton).fixedSize()
-                    .help("Capture the display under the pointer (⌘X), a window, or an image")
+                    .help(live.captureAttachments.count >= LiveSession.maximumCaptureImages
+                          ? "Remove an image before adding another."
+                          : "Add a display capture (⌘X), a window, or image files to this question.")
                     .accessibilityIdentifier("captureMenu")
-                    .disabled(!live.canCapture || live.capturing)
+                    .disabled(!live.canCapture || live.capturing || live.captureAttachments.count >= LiveSession.maximumCaptureImages)
                     TextField(live.options.practice ? "Type your practice answer" : "Type to ask CueLens…", text: $live.composer, axis: .vertical)
                         .textFieldStyle(.plain)
                         .lineLimit(1...4)
@@ -711,16 +706,59 @@ private struct SessionComposer: View {
                     .controlSize(.large)
                     .accessibilityLabel(sendLabel)
                     .accessibilityIdentifier("sendQuestion")
-                    .disabled(!live.canAnswer)
+                    .disabled(!live.canAnswer || live.capturing)
                     .help("Send or answer the latest question (⌘C)")
             }
         }
         .padding(11)
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.png, .jpeg, .heic, .tiff]) { result in
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.png, .jpeg, .heic, .tiff], allowsMultipleSelection: true) { result in
             switch result {
-            case .success(let url): live.attachImage(url)
+            case .success(let urls): live.attachImages(urls)
             case .failure(let error): live.captureError = error.localizedDescription
             }
+        }
+    }
+
+    private var imageAttachments: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text("\(live.captureAttachments.count) \(live.captureAttachments.count == 1 ? "image" : "images") attached")
+                    .font(.caption.weight(.medium))
+                    .accessibilityIdentifier("captureImageCount")
+                Spacer()
+                Button("Clear All") { live.discardImage() }
+                    .buttonStyle(.borderless).font(.caption)
+                    .accessibilityIdentifier("clearCaptureImages")
+            }
+            ScrollView(.horizontal) {
+                HStack(alignment: .top, spacing: 9) {
+                    ForEach(Array(live.captureAttachments.enumerated()), id: \.element.id) { index, attachment in
+                        VStack(spacing: 5) {
+                            Group {
+                                if let preview = NSImage(data: attachment.image.data) {
+                                    Image(nsImage: preview).resizable().scaledToFit()
+                                } else {
+                                    Image(systemName: "photo").foregroundStyle(.secondary)
+                                }
+                            }
+                            .frame(width: 104, height: 64)
+                            .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
+                            .accessibilityLabel("Image \(index + 1) preview")
+                            HStack {
+                                Text("Image \(index + 1)").font(.caption2).foregroundStyle(.secondary)
+                                Spacer(minLength: 0)
+                                Button("Remove Image \(index + 1)", systemImage: "xmark.circle.fill") {
+                                    live.removeCaptureImage(attachment.id)
+                                }.labelStyle(.iconOnly).buttonStyle(.borderless)
+                                    .help("Remove image \(index + 1)")
+                                    .accessibilityIdentifier("removeCaptureImage\(index + 1)")
+                            }
+                        }.frame(width: 104)
+                    }
+                }
+            }
+            Text("Review \(live.captureAttachments.count == 1 ? "this image" : "these images") before sending to \(live.currentProvider.provider.shortName). They will be sent together in the order shown.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 }

@@ -2,7 +2,7 @@ import Foundation
 
 enum ProviderError: LocalizedError, Equatable {
     case modelRequired, credentialUnavailable, providerDisabled
-    case invalidResponse, emptyResponse, responseInterrupted, cloudApprovalRequired, refused, incomplete
+    case invalidResponse, emptyResponse, responseInterrupted, cloudApprovalRequired, refused, incomplete, imagePayloadTooLarge
     case http(Int)
     case keychain(Int32)
 
@@ -17,6 +17,7 @@ enum ProviderError: LocalizedError, Equatable {
         case .cloudApprovalRequired: "Allow cloud processing before sending session content."
         case .refused: "The provider declined this request."
         case .incomplete: "The provider reached its output limit. Retry with a shorter response."
+        case .imagePayloadTooLarge: "These images exceed the provider’s request size limit. Remove an image or choose smaller files, then retry."
         case .http(400): "The provider rejected this request. Check the model ID and whether it supports the requested input."
         case .http(401), .http(403): "The provider rejected access. Check the API key and model permissions."
         case .http(404): "The model was unavailable. Check the model ID and access in Providers."
@@ -79,7 +80,7 @@ struct ProviderConnection {
         url.scheme = "https"
         url.host = selection.provider.host
         var body: [String: Any]
-        let screenshot = prompt.image?.data.base64EncodedString()
+        let screenshots = prompt.images.map { $0.data.base64EncodedString() }
         var auth: [String: String]
         switch selection.provider {
         case .disabled:
@@ -89,11 +90,14 @@ struct ProviderConnection {
             auth = ["Authorization": "Bearer \(apiKey)"]
             body = ["model": model, "instructions": prompt.instructions, "input": prompt.input,
                     "max_output_tokens": prompt.outputLimit, "stream": true, "store": false]
-            if let screenshot {
-                body["input"] = [["role": "user", "content": [
-                    ["type": "input_text", "text": prompt.input],
-                    ["type": "input_image", "image_url": "data:image/jpeg;base64," + screenshot, "detail": "high"]
-                ]]]
+            if !screenshots.isEmpty {
+                var content = [[String: Any]]()
+                for (index, screenshot) in screenshots.enumerated() {
+                    content.append(["type": "input_text", "text": "Image \(index + 1):"])
+                    content.append(["type": "input_image", "image_url": "data:image/jpeg;base64," + screenshot, "detail": "high"])
+                }
+                content.append(["type": "input_text", "text": prompt.input])
+                body["input"] = [["role": "user", "content": content]]
             }
         case .claude:
             url.path = "/v1/messages"
@@ -106,11 +110,13 @@ struct ProviderConnection {
                 body["thinking"] = ["type": "disabled"]
                 body["output_config"] = ["effort": "low"]
             }
-            if let screenshot {
-                let content: [[String: Any]] = [
-                    ["type": "text", "text": prompt.input],
-                    ["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": screenshot]]
-                ]
+            if !screenshots.isEmpty {
+                var content = [[String: Any]]()
+                for (index, screenshot) in screenshots.enumerated() {
+                    content.append(["type": "text", "text": "Image \(index + 1):"])
+                    content.append(["type": "image", "source": ["type": "base64", "media_type": "image/jpeg", "data": screenshot]])
+                }
+                content.append(["type": "text", "text": prompt.input])
                 body["messages"] = [["role": "user", "content": content]]
             }
         case .gemini:
@@ -124,11 +130,13 @@ struct ProviderConnection {
                 body["generationConfig"] = ["maxOutputTokens": prompt.outputLimit, "candidateCount": 1,
                                             "thinkingConfig": ["thinkingLevel": "low"]]
             }
-            if let screenshot {
-                let parts: [[String: Any]] = [
-                    ["text": prompt.input],
-                    ["inlineData": ["mimeType": "image/jpeg", "data": screenshot]]
-                ]
+            if !screenshots.isEmpty {
+                var parts = [[String: Any]]()
+                for (index, screenshot) in screenshots.enumerated() {
+                    parts.append(["text": "Image \(index + 1):"])
+                    parts.append(["inlineData": ["mimeType": "image/jpeg", "data": screenshot]])
+                }
+                parts.append(["text": prompt.input])
                 body["contents"] = [["role": "user", "parts": parts]]
             }
         }
@@ -138,7 +146,11 @@ struct ProviderConnection {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         for (field, value) in auth { request.setValue(value, forHTTPHeaderField: field) }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let encoded = try JSONSerialization.data(withJSONObject: body, options: .withoutEscapingSlashes)
+        if selection.provider == .gemini, !screenshots.isEmpty, encoded.count > 20_000_000 {
+            throw ProviderError.imagePayloadTooLarge
+        }
+        request.httpBody = encoded
         return request
     }
 }
@@ -147,7 +159,24 @@ struct ProviderPrompt {
     let instructions: String
     let input: String
     let outputLimit: Int
-    var image: CaptureImage? = nil
+    var images: [CaptureImage]
+
+    init(instructions: String, input: String, outputLimit: Int, image: CaptureImage? = nil) {
+        self.init(instructions: instructions, input: input, outputLimit: outputLimit, images: image.map { [$0] } ?? [])
+    }
+
+    init(instructions: String, input: String, outputLimit: Int, images: [CaptureImage]) {
+        self.instructions = instructions
+        self.input = input
+        self.outputLimit = outputLimit
+        self.images = images
+    }
+
+    /// Compatibility for callers that explicitly construct a single-image request.
+    var image: CaptureImage? {
+        get { images.first }
+        set { images = newValue.map { [$0] } ?? [] }
+    }
 
     static let connectionTest = Self(instructions: "Reply with the single word Ready.", input: "Connection test.", outputLimit: 384)
 }

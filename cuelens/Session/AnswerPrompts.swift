@@ -68,7 +68,10 @@ enum AnswerPrompts {
             direction = "Start with a direct response. Apply this user-authored response format: \(response.instructions.prefix(800)). \(lengthInstruction(length))"
         case .capture:
             direction = """
-                Use the selected image if supplied. Identify the problem and state the approach in the first two sentences.
+                Use all attached images together, in the numbered order provided. Combine the problem statement,
+                examples, code, and constraints across the images. If images conflict, point out the conflict.
+                Do not invent cropped, unreadable, or missing text; state what is missing before relying on it.
+                Identify the problem and state the approach in the first two sentences.
                 Then give the algorithm, time and space complexity, and a short example or code where the user requests it.
                 Flag any missing or illegible constraints. Use the programming language requested by the user, then the one visible in the problem.
                 """

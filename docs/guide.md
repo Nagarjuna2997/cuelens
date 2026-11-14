@@ -81,3 +81,5 @@ The **Actions** menu copies text, exports TXT or Markdown, and deletes a session
 ## Screen sharing
 
 Use **Screen Sharing** to record an actual viewer-side test for the meeting app and sharing mode. Sharing an entire display can expose CueLens. Tab, window, and display sharing need separate checks. Capture and recording indicators remain visible in CueLens. See the [compatibility checklist](validation.md) for tested and unverified combinations.
+
+Attach up to six images (12 MB total) to one question. Repeated captures append to the preview strip. Choose Images supports multiple files. Remove individual images or use Clear All; Answer sends the remaining images together in displayed order.

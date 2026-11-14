@@ -1,6 +1,11 @@
 import AppKit
 import Observation
 
+struct CaptureAttachment: Identifiable {
+    let id = UUID()
+    let image: CaptureImage
+}
+
 /// Capture callbacks enqueue synchronously. The main actor can drain this inbox
 /// after `AudioPipeline.stop` as a delivery barrier, independently of task order.
 final class AudioEventInbox: @unchecked Sendable {
@@ -40,6 +45,8 @@ struct AudioIssueState {
 @Observable
 final class LiveSession {
     enum Phase { case idle, active, paused, ending }
+    static let maximumCaptureImages = 6
+    static let maximumCaptureBytes = 12_000_000
 
     private(set) var phase = Phase.idle
     private(set) var record: MeetingSession?
@@ -71,7 +78,9 @@ final class LiveSession {
     private(set) var practiceHint = ""
     private(set) var pendingSave: MeetingSession?
     private(set) var resourceCondition = ResourceCondition.normal
-    private(set) var captureImage: CaptureImage?
+    private(set) var captureAttachments = [CaptureAttachment]()
+    var captureImages: [CaptureImage] { captureAttachments.map(\.image) }
+    var captureImage: CaptureImage? { captureAttachments.first?.image }
     private(set) var capturing = false
     private(set) var completionMessage: String?
     var captureError: String?
@@ -98,7 +107,7 @@ final class LiveSession {
     @ObservationIgnored private var lastAutomatic: (String, Date)?
     @ObservationIgnored private var questionDate: Date?
     @ObservationIgnored private var lastTask = AnswerTask.suggestion
-    @ObservationIgnored private var lastImage: CaptureImage?
+    @ObservationIgnored private var lastImages = [CaptureImage]()
     @ObservationIgnored private var audioPart = [AudioSource: Int]()
     @ObservationIgnored private var checkpoint: Task<Void, Never>?
     @ObservationIgnored private let capture = WindowCapture()
@@ -184,8 +193,8 @@ final class LiveSession {
         practiceSpeech.removeAll()
         feedbackAttemptID = nil
         lastAutomatic = nil
-        lastImage = nil
-        captureImage = nil
+        lastImages.removeAll()
+        captureAttachments.removeAll()
         questionDate = nil
         lastTask = .suggestion
         index = nil
@@ -238,7 +247,7 @@ final class LiveSession {
         indexTask = nil
         index = nil
         discardImage()
-        lastImage = nil
+        lastImages.removeAll()
         // Stop capture immediately, then give already captured speech a bounded
         // opportunity to finish before saving the session.
         for source in enabled { stopSource(source, retainPartial: true, finalizeSpeech: true) }
@@ -287,7 +296,7 @@ final class LiveSession {
         pause()
         cancelAnswer()
         discardImage()
-        lastImage = nil
+        lastImages.removeAll()
         onEmergency?()
     }
 
@@ -368,7 +377,7 @@ final class LiveSession {
         timing = nil
         usage = TokenUsage()
         lastTask = .suggestion
-        lastImage = nil
+        lastImages.removeAll()
         questionDate = nil
     }
 
@@ -376,13 +385,17 @@ final class LiveSession {
 
     func regenerate() {
         guard !question.isEmpty else { return }
-        generate(question, task: lastTask, ended: questionDate, image: lastImage,
+        guard lastTask != .capture || !lastImages.isEmpty else {
+            captureError = "The previous images were cleared. Attach images before requesting another image answer."
+            return
+        }
+        generate(question, task: lastTask, ended: questionDate, images: lastImages,
                  retryingPracticeAttempt: lastTask == .practiceFeedback ? feedbackAttemptID : nil)
     }
 
     func technicalAnswer() {
         guard !question.isEmpty else { return }
-        generate(question, task: lastImage == nil ? .technical : .capture, image: lastImage)
+        generate(question, task: lastImages.isEmpty ? .technical : .capture, images: lastImages)
     }
 
     func nextPracticeQuestion(reviewing topic: String? = nil) {
@@ -465,7 +478,7 @@ final class LiveSession {
         guard requireScreenContext() else { return }
         let id = beginCapture()
         capture.chooseWindow { [weak self] result in
-            self?.finishCapture(result, id: id)
+            self?.finishCapture(result.map { image in image.map { [$0] } ?? [] }, id: id)
         }
     }
 
@@ -474,19 +487,38 @@ final class LiveSession {
         let id = beginCapture()
         captureWork = Task { [weak self] in
             guard let self else { return }
-            do { finishCapture(.success(try await capture.captureDisplay()), id: id) }
+            do { finishCapture(.success([try await capture.captureDisplay()]), id: id) }
             catch { if !Task.isCancelled { finishCapture(.failure(error), id: id) } }
         }
     }
 
     func attachImage(_ url: URL) {
+        attachImages([url])
+    }
+
+    func attachImages(_ urls: [URL]) {
         guard requireScreenContext() else { return }
+        guard !urls.isEmpty else { return }
+        guard captureAttachments.count + urls.count <= Self.maximumCaptureImages else {
+            captureError = "Attach up to \(Self.maximumCaptureImages) images per answer. Remove an image before adding more."
+            return
+        }
         let id = beginCapture()
         captureWork = Task { [weak self] in
+            let reading = Task.detached(priority: .userInitiated) {
+                try urls.map { url in
+                    try Task.checkCancellation()
+                    return try CaptureImage.read(url)
+                }
+            }
             do {
-                let image = try await Task.detached(priority: .userInitiated) { try CaptureImage.read(url) }.value
+                let images = try await withTaskCancellationHandler {
+                    try await reading.value
+                } onCancel: {
+                    reading.cancel()
+                }
                 try Task.checkCancellation()
-                self?.finishCapture(.success(image), id: id)
+                self?.finishCapture(.success(images), id: id)
             } catch {
                 if !Task.isCancelled { self?.finishCapture(.failure(error), id: id) }
             }
@@ -496,7 +528,11 @@ final class LiveSession {
     func setScreenContext(_ enabled: Bool) {
         guard phase == .active || phase == .paused else { return }
         options.screenContext = enabled
-        if !enabled { discardImage() }
+        if !enabled {
+            discardImage()
+            lastImages.removeAll()
+            if generating, lastTask == .capture { cancelAnswer() }
+        }
     }
 
     private func requireScreenContext() -> Bool {
@@ -509,7 +545,7 @@ final class LiveSession {
     }
 
     private func beginCapture() -> UUID {
-        discardImage()
+        cancelCapture()
         let id = UUID()
         captureID = id
         capturing = true
@@ -517,32 +553,57 @@ final class LiveSession {
         return id
     }
 
-    private func finishCapture(_ result: Result<CaptureImage?, Error>, id: UUID) {
+    private func finishCapture(_ result: Result<[CaptureImage], Error>, id: UUID) {
         guard captureID == id, canCapture else { return }
         capturing = false
         captureWork = nil
         captureID = nil
         switch result {
-        case .success(let image): captureImage = image
+        case .success(let images):
+            if let error = Self.captureLimitError(for: captureImages + images) {
+                captureError = error
+            } else {
+                captureAttachments.append(contentsOf: images.map(CaptureAttachment.init(image:)))
+            }
         case .failure(let error): captureError = error.localizedDescription
         }
     }
 
-    func discardImage() {
+    static func captureLimitError(for images: [CaptureImage]) -> String? {
+        if images.count > maximumCaptureImages {
+            return "Attach up to \(maximumCaptureImages) images per answer. Remove an image before adding more."
+        }
+        if images.reduce(0, { $0 + $1.data.count }) > maximumCaptureBytes {
+            return "These images exceed the 12 MB attachment limit. Remove an image or choose smaller images."
+        }
+        return nil
+    }
+
+    private func cancelCapture() {
         captureID = nil
         captureWork?.cancel()
         captureWork = nil
         capture.cancel()
         capturing = false
-        captureImage = nil
+    }
+
+    func removeCaptureImage(_ id: UUID) {
+        captureAttachments.removeAll { $0.id == id }
+        captureError = nil
+    }
+
+    func discardImage() {
+        cancelCapture()
+        captureAttachments.removeAll()
         captureError = nil
     }
 
     func sendCapture(question: String) {
-        guard let captureImage else { return }
-        if generate(question.isEmpty ? "Help me understand and solve the coding problem in this image." : question,
-                    task: .capture, image: captureImage) {
-            self.captureImage = nil
+        guard !capturing else { captureError = "Finishing capture. Press Answer when the previews appear."; return }
+        guard !captureAttachments.isEmpty else { return }
+        if generate(question.isEmpty ? "Help me understand and solve the coding problem across these images. Read them in attachment order." : question,
+                    task: .capture, images: captureImages) {
+            captureAttachments.removeAll()
             composer = ""
         }
     }
@@ -568,7 +629,7 @@ final class LiveSession {
     }
 
     @discardableResult
-    private func generate(_ text: String, task: AnswerTask, ended: Date? = nil, image: CaptureImage? = nil,
+    private func generate(_ text: String, task: AnswerTask, ended: Date? = nil, images: [CaptureImage] = [],
                           practiceAttempt: PracticeAttempt? = nil, retryingPracticeAttempt: UUID? = nil) -> Bool {
         guard phase == .active || phase == .paused, let assistant else { return false }
         let connection: ProviderConnection
@@ -579,7 +640,7 @@ final class LiveSession {
         responseIndex = nil
         questionDate = ended
         lastTask = task
-        lastImage = image
+        lastImages = images
         answer = ""
         answerError = nil
         feedbackAttemptID = practiceAttempt?.id ?? retryingPracticeAttempt
@@ -614,9 +675,10 @@ final class LiveSession {
                 guard self?.answerID == id else { return }
                 self?.index = available
                 self?.indexTask = nil
-                let prompt = AnswerPrompts.make(task: task, question: text, assistant: assistant, index: available,
-                                                recent: history, length: length, preset: preset, image: image,
+                var prompt = AnswerPrompts.make(task: task, question: text, assistant: assistant, index: available,
+                                                recent: history, length: length, preset: preset,
                                                 recentSuggestions: recentSuggestions)
+                prompt.images = images
                 self?.record?.sentTextToCloud = true
                 self?.scheduleCheckpoint()
                 try await streamer.stream(prompt, connection: connection) { [weak self] event in

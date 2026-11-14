@@ -415,7 +415,7 @@ private struct FloatingBar: View {
                 if model.live.pendingSave != nil {
                     Button("Retry Saving Previous Session") { model.live.retrySave() }
                 }
-                Button("Hide Bar") { controller.hide() }
+                Button(attached ? "Hide Panel" : "Hide Bar") { controller.hide() }
             } label: {
                 Label("Bar settings", systemImage: "gearshape").labelStyle(.iconOnly)
             }

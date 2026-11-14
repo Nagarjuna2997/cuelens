@@ -31,9 +31,11 @@ Vision generates a person mask used for the background composite. Test hair, gla
 
 ## Eye contact
 
-**Eye contact correction** is unavailable in this build. A licensed, suitable gaze-correction model has not been validated on the target Mac. The former pixel-shifting experiment is outside the active video pipeline. Automatic framing changes crop position. It does not redirect the eyes or reconstruct head pose.
+**Built-in eye contact correction** is an experimental local Core ML feature, off by default. In **Camera**, use **Install Local Models…** to select a folder containing a compatible `FLX-L.mlmodelc` / `FLX-R.mlmodelc` pair you have permission to use. The app validates both models before replacing an existing pair. Model weights are not bundled with CueLens. Select a physical camera, enable **Enable local eye correction**, and start the camera; **Correction strength** adjusts the effect.
 
-A future gaze module needs verified model redistribution rights and real comparisons for blinking, glasses, head angles, natural movement, identity preservation, and an immediate original-feed fallback. The current camera-position coaching remains available.
+The processor uses learned eye warps and lighting adjustments. It bypasses correction for uncertain or closed eyes, large head turns, missing models, processing errors, and resource pressure. **Before and After** compares raw and processed video; **Bypass** restores the original frame. The preview reports whether correction was applied or why it was bypassed. Automatic framing changes crop position; neither feature reconstructs head pose.
+
+Native model execution and localized eye processing have been verified on this Mac. Natural eye contact while reading, blink and identity preservation, glasses, varied lighting, and the image received by another meeting participant still need live quality validation. The model assumes a laptop camera above the screen and does not guarantee centered eyes at every angle. See [the integration and validation notes](gaze.md) for installation details, measured evidence, and model distribution limits.
 
 ## Send video to a meeting app
 

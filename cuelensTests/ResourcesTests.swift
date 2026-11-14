@@ -10,6 +10,27 @@ final class ResourcesTests: XCTestCase {
         XCTAssertEqual(ResourceCondition.evaluate(thermal: .fair, memory: [.warning, .critical]), .critical)
     }
 
+    @MainActor
+    func testCameraRecoversAfterCooldownWithoutClearingActiveMemoryPressure() {
+        let camera = CameraPreview()
+        camera.preset = .balanced
+        camera.lowResources = ResourceCondition.evaluate(thermal: .serious, memory: .normal).reducesWork
+        XCTAssertEqual(camera.effectiveProcessingPreset, .low)
+
+        camera.lowResources = ResourceCondition.evaluate(thermal: .fair, memory: .warning).reducesWork
+        XCTAssertEqual(camera.effectiveProcessingPreset, .low)
+
+        camera.lowResources = ResourceCondition.evaluate(thermal: .fair, memory: .normal).reducesWork
+        XCTAssertEqual(camera.effectiveProcessingPreset, .balanced)
+        XCTAssertEqual(camera.preset, .balanced, "Temporary throttling must preserve the user's preset.")
+
+        camera.preset = .low
+        camera.lowResources = true
+        camera.lowResources = false
+        XCTAssertEqual(camera.effectiveProcessingPreset, .low, "Recovery must respect a selected low preset.")
+        XCTAssertFalse(camera.active)
+    }
+
     func testStoppedAudioPipelineCannotBeRestarted() async {
         let pipeline = AudioPipeline(source: .manual) { _ in }
         await pipeline.stop()

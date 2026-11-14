@@ -2,7 +2,7 @@
 
 CueLens is a native macOS camera studio, conversation assistant, and interview practice app. Studio handles setup; live transcripts and streamed answers share a floating window with its control bar attached at the top. Each role keeps its own résumé, documents, and practice history.
 
-The 0.3.0 rebuild adds local automatic framing, desk calibration, posture cues, background effects, a movable video preview, and an adaptive practice loop. The existing app icon is retained. Eye-contact correction is marked unavailable while a suitably licensed model and its output quality remain unvalidated.
+The 0.3.0 rebuild adds local automatic framing, desk calibration, posture cues, background effects, a movable video preview, and an adaptive practice loop. The existing app icon is retained. Experimental native eye-contact correction is available with a separately installed compatible local model pair; model weights are not bundled, and live appearance and outgoing meeting video still need validation. See [gaze status](docs/gaze.md).
 
 ## Build and run
 
@@ -29,7 +29,7 @@ Start **Practice** for behavioral, technical, coding-discussion, or project ques
 
 ## Current validation
 
-The 0.3.0 release candidate passed 101 unit tests on an M4 MacBook Air. Camera preview, system-audio transcription, retained audio playback, End-to-bar behavior, and an OpenAI streamed answer were checked on this Mac. Measurements and remaining checks are recorded in [validation](docs/validation.md). Virtual-camera output requires the separately signed and activated extension. Meeting-app compatibility, full-screen sharing behavior, and live API performance must be established for each tested configuration.
+The 0.3.0 release candidate passed 102 unit tests on an M4 MacBook Air. Camera preview, system-audio transcription, retained audio playback, End-to-bar behavior, and an OpenAI streamed answer were checked on this Mac. Measurements and remaining checks are recorded in [validation](docs/validation.md). Virtual-camera output requires the separately signed and activated extension. Meeting-app compatibility, full-screen sharing behavior, and live API performance must be established for each tested configuration.
 
 ## Documentation
 
@@ -44,5 +44,3 @@ The 0.3.0 release candidate passed 101 unit tests on an M4 MacBook Air. Camera p
 - [Tests and compatibility checklist](docs/validation.md)
 - [Contributing](CONTRIBUTING.md)
 - [MIT license](LICENSE)
-
-An experimental native Core ML eye-correction processor is available in Camera Studio when a compatible local model pair is installed. Model weights are not included in the public bundle. Live appearance and outgoing meeting video still require validation; see [gaze status](docs/gaze.md).

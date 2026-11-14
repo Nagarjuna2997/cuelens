@@ -280,7 +280,9 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
         window.level = .floating
         window.hidesOnDeactivate = false
         window.animationBehavior = .none
-        window.isMovableByWindowBackground = true
+        // Content clicks belong to controls and text selection. The dedicated
+        // grips call performDrag without competing with the composer.
+        window.isMovableByWindowBackground = false
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = true
@@ -303,6 +305,15 @@ final class FloatingWindow: NSObject, NSWindowDelegate {
 private final class CuePanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func sendEvent(_ event: NSEvent) {
+        // A nonactivating panel may otherwise remain visible while the previous
+        // app owns keyboard focus. Acquire it for an explicit click before
+        // SwiftUI routes the event to its text editor. Passive hotkey reveals
+        // still leave keyboard focus in the meeting app.
+        if event.type == .leftMouseDown, !isKeyWindow { makeKey() }
+        super.sendEvent(event)
+    }
 }
 
 private struct FloatingContent: View {

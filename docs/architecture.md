@@ -15,7 +15,7 @@ CueLens is a native macOS app. SwiftUI provides Studio, assistants, providers, p
 
 AVFoundation captures a selected camera and supported format. A dedicated processing queue runs Vision tracking, smoothed crop/framing, and Core Image effects. The result feeds the local preview and, when explicitly enabled and available, the virtual-camera publisher. Resource pressure can reduce processing quality. Tracking loss widens the frame instead of making a sudden crop toward an uncertain position.
 
-Framing follows a subject by cropping; it does not rotate their head or eyes. Posture cues use detected geometry and a seated calibration, not medical or emotional judgments. Eye-contact correction is unavailable in the active pipeline until a licensed, tested model is integrated. Historical gaze-warp files are not evidence of a working production correction feature. See [camera behavior](camera.md).
+Framing follows a subject by cropping; it does not rotate their head or eyes. Posture cues use detected geometry and a seated calibration, not medical or emotional judgments. An experimental native eye-correction stage runs before effects and framing when explicitly enabled and a compatible local model pair is installed. Vision supplies face pose and eye geometry, Core ML runs learned FLX flow and lighting networks on the CPU, and Swift applies the eye-region warp and blend. The processor returns the original image when geometry is uncertain, resources are constrained, or processing fails. Model weights are separate local assets; redistribution rights and live-video quality remain unvalidated. See [camera behavior](camera.md) and [gaze validation](gaze.md).
 
 ## Audio and answers
 

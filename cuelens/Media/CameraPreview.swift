@@ -88,7 +88,8 @@ final class CameraPreview {
     var posture = PostureSettings() { didSet { configure(); saveSettings() } }
     var gaze = NativeGazeSettings() { didSet { configure(); saveSettings() } }
     var preset = ResourcePreset.balanced { didSet { configure() } }
-    var thermal = ProcessInfo.processInfo.thermalState { didSet { configure() } }
+    // Resources owns live thermal and memory state. A second launch-time thermal
+    // snapshot here can keep the camera throttled after the Mac has cooled down.
     var lowResources = false { didSet { configure() } }
     @ObservationIgnored var onSettingsChanged: ((CameraStudioSettings) -> Void)?
     @ObservationIgnored private var applyingSettings = false
@@ -98,6 +99,8 @@ final class CameraPreview {
     @ObservationIgnored private var frameWork: Task<Void, Never>?
     @ObservationIgnored private var calibrationWork: Task<Void, Never>?
     @ObservationIgnored private var token = UUID()
+
+    var effectiveProcessingPreset: ResourcePreset { lowResources ? .low : preset }
 
     var settingsSnapshot: CameraStudioSettings {
         var savedEffects = effects
@@ -305,9 +308,8 @@ final class CameraPreview {
     }
 
     private func configure() {
-        let reduced = lowResources || thermal == .serious || thermal == .critical
         engine?.configure(framing: framing, effects: effects, posture: posture, calibration: deskCalibration,
-                          background: background, preset: reduced ? .low : preset, throttled: reduced, gaze: gaze)
+                          background: background, preset: effectiveProcessingPreset, throttled: lowResources, gaze: gaze)
     }
 }
 
@@ -459,8 +461,10 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
         if gazeSettings.enabled {
             if effects.bypass {
                 gazeStatus = "Eye correction bypassed"
-            } else if reducedWork {
+            } else if throttled {
                 gazeStatus = "Eye correction paused · Resource pressure"
+            } else if reducedWork {
+                gazeStatus = "Eye correction paused · Catching up"
             } else {
                 let result = gazeProcessor.process(buffer: buffer, image: input, context: context, strength: gazeSettings.strength)
                 gazeImage = result.image

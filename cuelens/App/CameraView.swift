@@ -32,9 +32,10 @@ struct CameraStudioPanel: View {
             }
             if let frame = preview.frame {
                 if compare {
-                    cameraImage(frame.original, label: "Original", guides: false)
+                    comparison(frame)
+                } else {
+                    cameraImage(frame.processed, label: nil, guides: showGuides)
                 }
-                cameraImage(frame.processed, label: compare ? "Processed" : nil, guides: showGuides)
                 HStack(spacing: 8) {
                     Text(String(format: "%.0f fps", frame.fps)).monospacedDigit()
                     Text(String(format: "%.0f ms", frame.processingMilliseconds)).monospacedDigit()
@@ -120,12 +121,32 @@ struct CameraStudioPanel: View {
         }.controlSize(.small)
     }
 
-    private func cameraImage(_ image: CGImage, label: String?, guides: Bool) -> some View {
+    private func comparison(_ frame: CameraFrame) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 12) {
+                cameraImage(frame.original, label: "Original", guides: false, maximumHeight: 260)
+                    .frame(minWidth: 250, idealWidth: 250, maxWidth: .infinity, alignment: .topLeading)
+                cameraImage(frame.processed, label: "Processed", guides: showGuides, maximumHeight: 260)
+                    .frame(minWidth: 250, idealWidth: 250, maxWidth: .infinity, alignment: .topLeading)
+            }
+            // ViewThatFits measures ideal width first. Bound each tile's ideal
+            // size so the camera image's intrinsic width cannot force stacking.
+            .frame(minWidth: 520)
+
+            VStack(alignment: .leading, spacing: 10) {
+                cameraImage(frame.original, label: "Original", guides: false, maximumHeight: 150)
+                cameraImage(frame.processed, label: "Processed", guides: showGuides, maximumHeight: 150)
+            }
+        }
+        .accessibilityIdentifier("cameraBeforeAfterComparison")
+    }
+
+    private func cameraImage(_ image: CGImage, label: String?, guides: Bool, maximumHeight: CGFloat = 360) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             if let label { Text(label).font(.caption.weight(.medium)).foregroundStyle(.secondary) }
             Image(decorative: image, scale: 1)
                 .resizable().aspectRatio(contentMode: .fit)
-                .frame(maxHeight: 360)
+                .frame(maxHeight: maximumHeight)
                 .overlay {
                     if guides {
                         GeometryReader { geometry in

@@ -13,7 +13,7 @@ These decisions capture the user's current requirements for this repository.
 - Answers use OpenAI, Claude, or Gemini. Keep API credentials in Keychain and out of the public repository. Do not extract consumer-app login cookies or pretend those logins provide supported API access.
 - Make answer formatting readable: a concise opening, native headings and lists, expandable details, and copyable code. Keep personal claims grounded in uploaded experience.
 - Starting the selected camera with a session is an explicit persisted option. Never substitute the physical camera when a selected external source is unavailable. External apps control their own processing and capture lifecycle.
-- Keep camera processing local. Automatic framing and posture coaching are separate from eye-contact correction. Mark gaze correction unavailable until a licensed model has been integrated and validated.
+- Keep camera processing local. Automatic framing and posture coaching are separate from eye-contact correction. Keep native gaze correction off by default and explicitly experimental until model rights and live quality are validated. Missing models disable activation; never claim an applied warp guarantees centered eyes.
 - Record audio only when enabled. Screen context is optional and captured images are reviewed before sending. Turning screen context off removes the pending image.
 - Never claim universal invisibility during screen sharing. The operating system and receiving meeting app determine what is visible.
 - Keep measured results separate from implemented features and unverified compatibility. Record remaining authentication, provisioning, and device-validation limits in [validation](validation.md).

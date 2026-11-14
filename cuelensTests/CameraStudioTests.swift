@@ -4,6 +4,25 @@ import XCTest
 @testable import cuelens
 
 final class CameraStudioTests: XCTestCase {
+    @MainActor
+    func testNativeGazePreferenceRestoresWithoutStartingCaptureAndMigratesLegacySettings() throws {
+        var saved = CameraStudioSettings()
+        saved.gaze = NativeGazeSettings(enabled: true, strength: 0.4)
+        let encoded = try JSONEncoder().encode(saved)
+        let restored = CameraPreview()
+        restored.applySettings(try JSONDecoder().decode(CameraStudioSettings.self, from: encoded))
+        XCTAssertTrue(restored.gaze.enabled)
+        XCTAssertEqual(restored.gaze.strength, 0.4)
+        XCTAssertFalse(restored.active)
+        XCTAssertFalse(restored.starting)
+        XCTAssertFalse(restored.publishing)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacy.removeValue(forKey: "gaze")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacy)
+        restored.applySettings(try JSONDecoder().decode(CameraStudioSettings.self, from: legacyData))
+        XCTAssertFalse(restored.gaze.enabled)
+    }
+
     private func person(x: Double = 0.5, y: Double = 0.65) -> CameraTrackingSample {
         .init(face: CGRect(x: x - 0.1, y: y - 0.12, width: 0.2, height: 0.24), confidence: 0.95,
               leftShoulder: CGPoint(x: x - 0.18, y: 0.35), rightShoulder: CGPoint(x: x + 0.18, y: 0.35))

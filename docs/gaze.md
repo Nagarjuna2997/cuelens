@@ -1,6 +1,6 @@
 # Eye-contact correction: integration status
 
-Reviewed November 13, 2026. **CueLens does not currently redirect pupils or head pose.** Its camera framing changes the crop; posture coaching observes visible position. Neither makes an off-camera gaze appear centered. The existing eye-contact status therefore remains **Unavailable**.
+Reviewed November 13, 2026. **CueLens includes an experimental native Core ML eye-correction path.** It requires a compatible local model pair, is off by default, and does not correct head pose. Automatic framing still changes only the crop. Natural eye centering while reading has not been validated across people, angles, and lighting.
 
 An acceptable integration needs a usable camera-processing SDK or an independently installed virtual-camera provider, appropriate model and distribution rights, and observed correction on this Mac. A toggle, face detector, or geometric pixel shift does not establish that capability. The user authorized a separate local GazeAt trial. That evaluation is described below; no gaze model or vendor binary is bundled with CueLens.
 
@@ -44,10 +44,26 @@ The meeting app can select the vendor camera directly. Relaying additional CueLe
 
 ## Built-in implementation path
 
-A separate app is not an inherent macOS requirement. CueLens can host its own gaze inference before effects and framing. The public FLX network exposes optical-flow and lighting-weight tensors for each eye. A possible native implementation converts those network outputs to Core ML and applies the learned warp and blend with Metal, avoiding a Python runtime. This still requires faithful eye landmarks and preprocessing, actual conversion, output parity against the original model, verified distribution rights for the chosen weights, and live-video quality validation. No converted model or native correction engine is currently shipped. [Model implementation](https://github.com/WangWilly/gaze-correction-cam/blob/master/tf_models/gaze_corrector_v1/gaze_warp_model.py), [Apple TensorFlow conversion workflow](https://apple.github.io/coremltools/docs-guides/source/tensorflow-1-workflow.html).
+A separate app is not an inherent macOS requirement. CueLens can host its own gaze inference before effects and framing. The public FLX network exposes optical-flow and lighting-weight tensors for each eye. A possible native implementation converts those network outputs to Core ML and applies the learned warp and blend with Metal, avoiding a Python runtime. This still requires faithful eye landmarks and preprocessing, actual conversion, output parity against the original model, verified distribution rights for the chosen weights, and live-video quality validation. The native processor is now implemented; converted model weights are separate local assets and are not included in the public application bundle. [Model implementation](https://github.com/WangWilly/gaze-correction-cam/blob/master/tf_models/gaze_corrector_v1/gaze_warp_model.py), [Apple TensorFlow conversion workflow](https://apple.github.io/coremltools/docs-guides/source/tensorflow-1-workflow.html).
 
 ## Quality limits and acceptance
 
 Natural correction has a working range. NVIDIA's published implementation recommends roughly a 20-degree pitch/yaw cone, reduces correction as the eyes move farther away, and disables it for large head rotations or obscured eyes. This is evidence about that implementation, not a measured CueLens limit or a guarantee for other vendors. [NVIDIA working range and occlusion handling](https://developer.nvidia.com/blog/improve-human-connection-in-video-conferences-with-nvidia-maxine-eye-contact/)
 
-Before enabling a future module, compare raw and corrected video while reading near and far from the lens, blinking, turning the head, wearing glasses, and moving in varied light. Verify identity and eyelid preservation, graceful fallback, instant bypass, bounded queues, actual frame rate/latency, and the image received by a separate meeting client. Until those checks pass, keep correction unavailable rather than promise eyes will stay centered at every angle.
+Before enabling a future module, compare raw and corrected video while reading near and far from the lens, blinking, turning the head, wearing glasses, and moving in varied light. Verify identity and eyelid preservation, graceful fallback, instant bypass, bounded queues, actual frame rate/latency, and the image received by a separate meeting client. Until those checks pass, keep correction labeled experimental and do not promise eyes will stay centered at every angle.
+
+## Local Core ML conversion experiment
+
+The original learned left/right FLX checkpoint networks were converted locally to Core ML MLProgram and executed by a standalone Swift program on this M4. The fixed inputs are a 48 × 64 BGR eye patch, 12 channels of raw pixel landmark offsets, and two correction angles; outputs are learned flow and lighting weights. Native CPU-only network medians were 1.69 ms and 1.98 ms in one short run. These times exclude landmark detection, compositing, camera capture, and outgoing video.
+
+Eight synthetic input/angle cases were compared against TensorFlow. Two left-eye cases exceeded a strict 1e-4 tensor tolerance; the largest final corrected-patch difference was approximately 0.194 of one 8-bit level. This establishes numerical feasibility, not natural eye-contact quality. Vision revision 3 with the 76-point constellation produced six-point eye outlines on a public-domain NASA sample. The native adapter must validate their geometry and map the eye by its image position rather than assume dlib index equivalence.
+
+Conversion environments, fixtures, models, and compiled model assets remain in ignored local build storage. No model weights or GazeAt executable have been committed or bundled into the public CueLens app. Distribution rights and live-user quality validation remain separate requirements.
+
+## Using the experimental native path
+
+In Camera Studio, **Install Local Models…** imports a compatible compiled `FLX-L.mlmodelc` / `FLX-R.mlmodelc` pair from a selected folder into CueLens's own application-support directory. Both networks are checked before replacement. No GazeAt process or Python runtime is used by this camera path. The local development conversion is for evaluation; its model rights have not been established for public redistribution.
+
+Select a physical camera, enable **local eye correction**, and start the camera. **Before and After** compares raw and processed video; **Bypass** restores the original frame. Session Setup's **Start selected camera with session** remembers camera startup. The correction setting persists, but launching CueLens alone does not start capture. End stops CueLens's camera.
+
+The current geometry assumes a laptop lens above the reading area, with a conservative 10 cm vertical offset. It is not an individually measured gaze calibration. Correction bypasses on missing models, ambiguous or closed eyes, large pose changes, unsupported frames, errors, or resource pressure. A successful applied status means the learned warp was used, not that the viewer perceives perfect eye contact. The CueLens virtual-camera extension still requires separate signing and activation before processed frames can be received in meeting apps.

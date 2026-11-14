@@ -43,6 +43,8 @@ struct CameraFrame {
     let fps: Double
     let processingMilliseconds: Double
     let droppedFrames: Int
+    var gazeStatus: String? = nil
+    var gazeApplied = false
 }
 
 /// The camera queue must never accumulate full-resolution images behind a busy UI.
@@ -84,6 +86,7 @@ final class CameraPreview {
     var framing = FramingSettings() { didSet { configure(); saveSettings() } }
     var effects = VideoEffects() { didSet { configure(); saveSettings() } }
     var posture = PostureSettings() { didSet { configure(); saveSettings() } }
+    var gaze = NativeGazeSettings() { didSet { configure(); saveSettings() } }
     var preset = ResourcePreset.balanced { didSet { configure() } }
     var thermal = ProcessInfo.processInfo.thermalState { didSet { configure() } }
     var lowResources = false { didSet { configure() } }
@@ -102,7 +105,7 @@ final class CameraPreview {
         var savedFraming = framing
         savedFraming.locked = false
         return CameraStudioSettings(deviceID: deviceID, format: format, framing: savedFraming,
-                                    effects: savedEffects, posture: posture, calibration: deskCalibration)
+                                    effects: savedEffects, posture: posture, calibration: deskCalibration, gaze: gaze)
     }
 
     func applySettings(_ settings: CameraStudioSettings) {
@@ -116,6 +119,7 @@ final class CameraPreview {
         if effects.background == .replacement { effects.background = .original }
         posture = settings.posture
         deskCalibration = settings.calibration
+        gaze = settings.gaze ?? NativeGazeSettings()
         applyingSettings = false
     }
 
@@ -303,7 +307,7 @@ final class CameraPreview {
     private func configure() {
         let reduced = lowResources || thermal == .serious || thermal == .critical
         engine?.configure(framing: framing, effects: effects, posture: posture, calibration: deskCalibration,
-                          background: background, preset: reduced ? .low : preset, throttled: reduced)
+                          background: background, preset: reduced ? .low : preset, throttled: reduced, gaze: gaze)
     }
 }
 
@@ -314,6 +318,8 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
     private let output: @Sendable (Result<CameraFrame, CameraFailure>) -> Void
     private let tracker = CameraTracker()
     private let effectsProcessor = CameraEffects()
+    private lazy var gazeProcessor = NativeGazeProcessor()
+    private var gazeSettings = NativeGazeSettings()
     private var framing = CameraFraming()
     private var coach = PostureCoach()
     private var framingSettings = FramingSettings()
@@ -371,7 +377,7 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
         }
     }
 
-    func configure(framing: FramingSettings, effects: VideoEffects, posture: PostureSettings, calibration: DeskCalibration?, background: CGImage?, preset: ResourcePreset, throttled: Bool) {
+    func configure(framing: FramingSettings, effects: VideoEffects, posture: PostureSettings, calibration: DeskCalibration?, background: CGImage?, preset: ResourcePreset, throttled: Bool, gaze: NativeGazeSettings) {
         queue.async {
             self.framingSettings = framing
             self.effects = effects
@@ -380,6 +386,7 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
             self.background = background.map { CIImage(cgImage: $0) }
             self.throttled = throttled
             self.fpsTarget = preset == .low ? 15 : 30
+            self.gazeSettings = gaze
         }
     }
 
@@ -446,7 +453,22 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
             lastDetection = now
         }
         let crop = framing.update(latestTracking, settings: framingSettings, now: now)
-        let adjusted = effectsProcessor.apply(input, buffer: buffer, settings: effects, background: background, reducedWork: reducedWork)
+        var gazeImage = input
+        var gazeStatus: String?
+        var gazeApplied = false
+        if gazeSettings.enabled {
+            if effects.bypass {
+                gazeStatus = "Eye correction bypassed"
+            } else if reducedWork {
+                gazeStatus = "Eye correction paused · Resource pressure"
+            } else {
+                let result = gazeProcessor.process(buffer: buffer, image: input, context: context, strength: gazeSettings.strength)
+                gazeImage = result.image
+                gazeStatus = result.status
+                gazeApplied = result.applied
+            }
+        }
+        let adjusted = effectsProcessor.apply(gazeImage, buffer: buffer, settings: effects, background: background, reducedWork: reducedWork)
         let processedInput: CIImage
         if effects.bypass {
             processedInput = input
@@ -488,6 +510,7 @@ private final class CameraEngine: NSObject, AVCaptureVideoDataOutputSampleBuffer
         if lateFrames >= 8 { reduceEffectsUntil = now + 5; lateFrames = 0 }
         self.output(.success(CameraFrame(capturedAt: now, original: original, processed: processed, tracking: latestTracking,
                                          crop: crop, status: status, postureCue: postureCue, fps: fps,
-                                         processingMilliseconds: elapsed * 1_000, droppedFrames: droppedFrames)))
+                                         processingMilliseconds: elapsed * 1_000, droppedFrames: droppedFrames,
+                                         gazeStatus: gazeStatus, gazeApplied: gazeApplied)))
     }
 }

@@ -29,7 +29,7 @@ Start **Practice** for behavioral, technical, coding-discussion, or project ques
 
 ## Current validation
 
-The 0.3.0 release candidate passed 92 unit tests on an M4 MacBook Air. Camera preview, system-audio transcription, retained audio playback, End-to-bar behavior, and an OpenAI streamed answer were checked on this Mac. Measurements and remaining checks are recorded in [validation](docs/validation.md). Virtual-camera output requires the separately signed and activated extension. Meeting-app compatibility, full-screen sharing behavior, and live API performance must be established for each tested configuration.
+The 0.3.0 release candidate passed 101 unit tests on an M4 MacBook Air. Camera preview, system-audio transcription, retained audio playback, End-to-bar behavior, and an OpenAI streamed answer were checked on this Mac. Measurements and remaining checks are recorded in [validation](docs/validation.md). Virtual-camera output requires the separately signed and activated extension. Meeting-app compatibility, full-screen sharing behavior, and live API performance must be established for each tested configuration.
 
 ## Documentation
 
@@ -44,3 +44,5 @@ The 0.3.0 release candidate passed 92 unit tests on an M4 MacBook Air. Camera pr
 - [Tests and compatibility checklist](docs/validation.md)
 - [Contributing](CONTRIBUTING.md)
 - [MIT license](LICENSE)
+
+An experimental native Core ML eye-correction processor is available in Camera Studio when a compatible local model pair is installed. Model weights are not included in the public bundle. Live appearance and outgoing meeting video still require validation; see [gaze status](docs/gaze.md).

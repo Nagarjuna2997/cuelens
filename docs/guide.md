@@ -83,3 +83,5 @@ The **Actions** menu copies text, exports TXT or Markdown, and deletes a session
 Use **Screen Sharing** to record an actual viewer-side test for the meeting app and sharing mode. Sharing an entire display can expose CueLens. Tab, window, and display sharing need separate checks. Capture and recording indicators remain visible in CueLens. See the [compatibility checklist](validation.md) for tested and unverified combinations.
 
 Attach up to six images (12 MB total) to one question. Repeated captures append to the preview strip. Choose Images supports multiple files. Remove individual images or use Clear All; Answer sends the remaining images together in displayed order.
+
+Experimental eye correction is under **Camera → Built-in eye contact correction**. A compatible local model pair must be installed first. Enable it and use **Before and After** to compare with the original camera; **Bypass** turns all effects off immediately. See [eye-correction status](gaze.md) for working assumptions and limitations.

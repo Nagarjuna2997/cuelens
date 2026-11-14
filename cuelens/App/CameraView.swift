@@ -48,6 +48,11 @@ struct CameraStudioPanel: View {
                         .background(.quaternary, in: RoundedRectangle(cornerRadius: 9))
                 }
                 Text(frame.status).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                if let status = frame.gazeStatus {
+                    Label(status, systemImage: frame.gazeApplied ? "eye" : "eye.slash")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("nativeGazeStatus")
+                }
             } else {
                 ZStack {
                     RoundedRectangle(cornerRadius: 14).fill(CueStyle.canvas)
@@ -150,6 +155,10 @@ struct CameraView: View {
     @State private var cameraID: String?
     @State private var installing = false
     @State private var importingBackground = false
+    @State private var importingGazeModels = false
+    @State private var installingGazeModels = false
+    @State private var gazeModelsAvailable = NativeGazeProcessor.modelsAvailable
+    @State private var gazeModelMessage: String?
 
     var body: some View {
         ScrollView {
@@ -232,9 +241,30 @@ struct CameraView: View {
                     }
                 }
                 CueCard {
-                    HStack { Text("Built-in eye contact correction").font(.headline); Spacer(); Text("Unavailable").foregroundStyle(.secondary) }
-                    Text("CueLens does not yet redirect your eyes. Automatic framing only adjusts the crop. If you select an external camera, its app controls any eye correction; CueLens cannot verify that it is enabled.")
+                    HStack {
+                        Text("Built-in eye contact correction").font(.headline)
+                        Spacer()
+                        Text(gazeModelsAvailable ? "Experimental" : "Model unavailable").foregroundStyle(.secondary)
+                    }
+                    Toggle("Enable local eye correction", isOn: $preview.gaze.enabled)
+                        .disabled((!gazeModelsAvailable && !preview.gaze.enabled) || installingGazeModels)
+                        .accessibilityIdentifier("enableNativeGaze")
+                    if preview.gaze.enabled {
+                        slider("Correction strength", value: $preview.gaze.strength, range: 0...1, display: percent(preview.gaze.strength))
+                    }
+                    Text("Uses a local model inside CueLens. Start with a physical camera and read near the lens. Blinks, large head turns, uncertain eyes, or resource pressure bypass correction. Before and After compares the original camera with the processed view.")
                         .font(.callout).foregroundStyle(.secondary)
+                    Text("This experimental model assumes a laptop camera above the screen. Natural eye centering is still being validated; it does not keep your eyes centered at every reading angle.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button(gazeModelsAvailable ? "Replace Local Models…" : "Install Local Models…") { importingGazeModels = true }
+                        .disabled(installingGazeModels)
+                        .accessibilityIdentifier("installNativeGazeModels")
+                    if installingGazeModels { ProgressView("Validating local models…").controlSize(.small) }
+                    if let gazeModelMessage { Text(gazeModelMessage).font(.caption).foregroundStyle(.secondary) }
+                    if !gazeModelsAvailable {
+                        Text("Model files are not included in this build. Install a compatible pair you have permission to use; processing stays on your Mac.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 virtualCameraSection
             }
@@ -255,6 +285,20 @@ struct CameraView: View {
         }
         .fileImporter(isPresented: $importingBackground, allowedContentTypes: [.png, .jpeg, .heic]) { result in
             if case .success(let url) = result { preview.setBackground(url) }
+        }
+        .fileImporter(isPresented: $importingGazeModels, allowedContentTypes: [.folder]) { result in
+            guard case .success(let url) = result else { return }
+            preview.stop()
+            installingGazeModels = true
+            gazeModelMessage = nil
+            Task {
+                do {
+                    try await Task.detached(priority: .userInitiated) { try NativeGazeModelStore.install(from: url) }.value
+                    gazeModelMessage = "Local models installed. Start the camera to test correction."
+                } catch { gazeModelMessage = error.localizedDescription }
+                gazeModelsAvailable = NativeGazeProcessor.modelsAvailable
+                installingGazeModels = false
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: AVCaptureDevice.wasConnectedNotification)) { _ in cameras = CameraDevice.available() }
         .onReceive(NotificationCenter.default.publisher(for: AVCaptureDevice.wasDisconnectedNotification)) { _ in cameras = CameraDevice.available() }

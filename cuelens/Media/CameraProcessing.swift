@@ -357,4 +357,10 @@ struct CameraStudioSettings: Codable, Equatable {
     var effects = VideoEffects()
     var posture = PostureSettings()
     var calibration: DeskCalibration?
+    var gaze: NativeGazeSettings?
+}
+
+struct NativeGazeSettings: Codable, Equatable {
+    var enabled = false
+    var strength = 0.6
 }

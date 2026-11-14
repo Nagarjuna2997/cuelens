@@ -29,7 +29,7 @@ Start **Practice** for behavioral, technical, coding-discussion, or project ques
 
 ## Current validation
 
-The 0.3.0 release candidate passed 84 unit tests on an M4 MacBook Air. Camera preview, system-audio transcription, retained audio playback, End-to-bar behavior, and an OpenAI streamed answer were checked on this Mac. Measurements and remaining checks are recorded in [validation](docs/validation.md). Virtual-camera output requires the separately signed and activated extension. Meeting-app compatibility, full-screen sharing behavior, and live API performance must be established for each tested configuration.
+The 0.3.0 release candidate passed 92 unit tests on an M4 MacBook Air. Camera preview, system-audio transcription, retained audio playback, End-to-bar behavior, and an OpenAI streamed answer were checked on this Mac. Measurements and remaining checks are recorded in [validation](docs/validation.md). Virtual-camera output requires the separately signed and activated extension. Meeting-app compatibility, full-screen sharing behavior, and live API performance must be established for each tested configuration.
 
 ## Documentation
 
